@@ -1,0 +1,9 @@
+name: mental_health_classifier
+
+python_env: python_env.yaml
+
+entry_points:
+  main:
+    parameters:
+      model_type: {type: string, default: "logreg"}
+    command: "python src/training/train.py --model {model_type}"

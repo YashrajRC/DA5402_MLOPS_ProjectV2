@@ -1,0 +1,55 @@
+stages:
+  prepare:
+    cmd: python src/data/prepare.py
+    deps:
+      - src/data/prepare.py
+      - src/data/clean.py
+      - data/raw/data.csv
+    params:
+      - prepare
+    outs:
+      - data/processed/train.csv
+      - data/processed/test.csv
+      - data/baseline_stats.json
+
+  train_logreg:
+    cmd: python src/training/train.py --model logreg
+    deps:
+      - src/training/train.py
+      - src/training/features.py
+      - data/processed/train.csv
+      - data/processed/test.csv
+    params:
+      - features
+      - train.logreg
+    metrics:
+      - metrics/logreg_metrics.json:
+          cache: false
+
+  train_linearsvc:
+    cmd: python src/training/train.py --model linearsvc
+    deps:
+      - src/training/train.py
+      - src/training/features.py
+      - data/processed/train.csv
+      - data/processed/test.csv
+    params:
+      - features
+      - train.linearsvc
+    metrics:
+      - metrics/linearsvc_metrics.json:
+          cache: false
+
+  train_xgboost:
+    cmd: python src/training/train.py --model xgboost
+    deps:
+      - src/training/train.py
+      - src/training/features.py
+      - data/processed/train.csv
+      - data/processed/test.csv
+    params:
+      - features
+      - train.xgboost
+    metrics:
+      - metrics/xgboost_metrics.json:
+          cache: false

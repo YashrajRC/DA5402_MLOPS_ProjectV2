@@ -1,0 +1,69 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.venv/
+venv/
+env/
+*.egg-info/
+dist/
+build/
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+coverage.xml
+report.html
+
+# DVC tracks the actual data files; we commit only the .dvc pointers
+data/raw/*
+data/processed/*
+data/incoming/*
+!data/raw/.gitkeep
+!data/processed/.gitkeep
+!data/incoming/.gitkeep
+!data/raw/*.dvc
+!data/processed/*.dvc
+!data/incoming/*.dvc
+!data/raw/.gitignore
+!data/processed/.gitignore
+!data/incoming/.gitignore
+
+# MLflow runs (tracked via volumes, not git)
+mlruns/
+mlartifacts/
+
+# Airflow runtime
+airflow/logs/
+airflow/plugins/
+airflow/config/airflow.cfg
+
+# Docker
+.env
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+feedback.log
+
+# Models (DVC-tracked)
+*.pkl
+*.joblib
+*.h5
+!tests/fixtures/*.pkl
+
+*:Zone.Identifier
+*.Zone.Identifier
+*Zone.Identifier
+**/*:Zone.Identifier

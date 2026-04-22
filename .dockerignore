@@ -1,0 +1,15 @@
+.git
+.gitignore
+__pycache__
+*.pyc
+.pytest_cache
+.venv
+venv
+notebooks
+docs
+airflow/logs
+mlruns
+data
+models
+.dvc/cache
+.dvc/tmp

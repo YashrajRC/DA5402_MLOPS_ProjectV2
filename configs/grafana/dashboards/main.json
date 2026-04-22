@@ -1,0 +1,106 @@
+{
+  "title": "Mental Health Classifier — Observability",
+  "uid": "mhc-main",
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "5s",
+  "time": {"from": "now-15m", "to": "now"},
+  "panels": [
+    {
+      "id": 1,
+      "type": "stat",
+      "title": "Service Up",
+      "gridPos": {"x": 0, "y": 0, "w": 4, "h": 4},
+      "targets": [{"expr": "sum(up{job=\"fastapi\"})", "refId": "A"}],
+      "fieldConfig": {"defaults": {"mappings": [], "thresholds": {"mode": "absolute", "steps": [{"color": "red", "value": null}, {"color": "green", "value": 1}]}}}
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "Request Rate (req/s)",
+      "gridPos": {"x": 4, "y": 0, "w": 5, "h": 4},
+      "targets": [{"expr": "job:request_rate:1m", "refId": "A"}]
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "p95 Latency (s) — SLA 0.2",
+      "gridPos": {"x": 9, "y": 0, "w": 5, "h": 4},
+      "targets": [{"expr": "job:inference_latency_p95:2m", "refId": "A"}],
+      "fieldConfig": {"defaults": {"unit": "s", "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "red", "value": 0.2}]}}}
+    },
+    {
+      "id": 4,
+      "type": "stat",
+      "title": "Drift Score",
+      "gridPos": {"x": 14, "y": 0, "w": 5, "h": 4},
+      "targets": [{"expr": "drift_score", "refId": "A"}],
+      "fieldConfig": {"defaults": {"thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "orange", "value": 0.2}, {"color": "red", "value": 0.3}]}}}
+    },
+    {
+      "id": 5,
+      "type": "stat",
+      "title": "Error Rate",
+      "gridPos": {"x": 19, "y": 0, "w": 5, "h": 4},
+      "targets": [{"expr": "job:error_rate:2m", "refId": "A"}],
+      "fieldConfig": {"defaults": {"unit": "percentunit"}}
+    },
+    {
+      "id": 6,
+      "type": "timeseries",
+      "title": "Request Rate by Endpoint",
+      "gridPos": {"x": 0, "y": 4, "w": 12, "h": 8},
+      "targets": [{"expr": "sum by (endpoint) (rate(http_requests_total[1m]))", "legendFormat": "{{endpoint}}", "refId": "A"}]
+    },
+    {
+      "id": 7,
+      "type": "timeseries",
+      "title": "Latency Histogram (p50/p95/p99)",
+      "gridPos": {"x": 12, "y": 4, "w": 12, "h": 8},
+      "targets": [
+        {"expr": "histogram_quantile(0.5, sum(rate(inference_latency_seconds_bucket[2m])) by (le))", "legendFormat": "p50", "refId": "A"},
+        {"expr": "histogram_quantile(0.95, sum(rate(inference_latency_seconds_bucket[2m])) by (le))", "legendFormat": "p95", "refId": "B"},
+        {"expr": "histogram_quantile(0.99, sum(rate(inference_latency_seconds_bucket[2m])) by (le))", "legendFormat": "p99", "refId": "C"}
+      ],
+      "fieldConfig": {"defaults": {"unit": "s"}}
+    },
+    {
+      "id": 8,
+      "type": "piechart",
+      "title": "Predictions by Class",
+      "gridPos": {"x": 0, "y": 12, "w": 8, "h": 8},
+      "targets": [{"expr": "sum by (predicted_class) (predictions_total)", "legendFormat": "{{predicted_class}}", "refId": "A"}]
+    },
+    {
+      "id": 9,
+      "type": "timeseries",
+      "title": "CPU Usage (%)",
+      "gridPos": {"x": 8, "y": 12, "w": 8, "h": 8},
+      "targets": [{"expr": "100 - (avg(rate(node_cpu_seconds_total{mode=\"idle\"}[2m])) * 100)", "legendFormat": "CPU %", "refId": "A"}],
+      "fieldConfig": {"defaults": {"unit": "percent"}}
+    },
+    {
+      "id": 10,
+      "type": "timeseries",
+      "title": "Memory Usage (bytes)",
+      "gridPos": {"x": 16, "y": 12, "w": 8, "h": 8},
+      "targets": [{"expr": "node_memory_MemTotal_bytes - node_memory_MemAvailable_bytes", "legendFormat": "used", "refId": "A"}],
+      "fieldConfig": {"defaults": {"unit": "bytes"}}
+    },
+    {
+      "id": 11,
+      "type": "timeseries",
+      "title": "Active Requests (Gauge)",
+      "gridPos": {"x": 0, "y": 20, "w": 12, "h": 7},
+      "targets": [{"expr": "active_requests", "legendFormat": "{{instance}}", "refId": "A"}]
+    },
+    {
+      "id": 12,
+      "type": "timeseries",
+      "title": "Feedback Submissions (correct vs incorrect)",
+      "gridPos": {"x": 12, "y": 20, "w": 12, "h": 7},
+      "targets": [{"expr": "sum by (was_correct) (rate(feedback_total[5m]))", "legendFormat": "{{was_correct}}", "refId": "A"}]
+    }
+  ]
+}

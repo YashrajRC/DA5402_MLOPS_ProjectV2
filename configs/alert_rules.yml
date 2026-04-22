@@ -1,0 +1,53 @@
+groups:
+  - name: fastapi_alerts
+    interval: 30s
+    rules:
+      - alert: HighErrorRate
+        expr: |
+          (sum(rate(http_requests_total{status=~"5.."}[2m])) /
+           sum(rate(http_requests_total[2m]))) > 0.05
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "FastAPI error rate above 5%"
+          description: "Current error rate: {{ $value | humanizePercentage }}"
+
+      - alert: HighInferenceLatency
+        expr: |
+          histogram_quantile(0.95, sum(rate(inference_latency_seconds_bucket[2m])) by (le)) > 0.2
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "p95 inference latency exceeded 200ms SLA"
+          description: "p95 is {{ $value }}s"
+
+      - alert: DataDriftDetected
+        expr: drift_score > 0.3
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Input distribution drift detected"
+          description: "Drift score = {{ $value }}"
+
+      - alert: ModelServingDown
+        expr: up{job="fastapi"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "FastAPI instance down"
+
+  - name: node_alerts
+    rules:
+      - alert: HighCPUUsage
+        expr: |
+          100 - (avg by (instance)(rate(node_cpu_seconds_total{mode="idle"}[2m])) * 100) > 80
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "CPU above 80% for 2 minutes"
+          description: "Host CPU at {{ $value }}%"

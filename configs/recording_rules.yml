@@ -1,0 +1,14 @@
+groups:
+  - name: recording_rules
+    interval: 30s
+    rules:
+      - record: job:inference_latency_p95:2m
+        expr: histogram_quantile(0.95, sum(rate(inference_latency_seconds_bucket[2m])) by (le))
+
+      - record: job:request_rate:1m
+        expr: sum(rate(http_requests_total[1m]))
+
+      - record: job:error_rate:2m
+        expr: |
+          sum(rate(http_requests_total{status=~"5.."}[2m])) /
+          sum(rate(http_requests_total[2m]))
