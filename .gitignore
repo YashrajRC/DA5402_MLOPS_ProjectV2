@@ -22,6 +22,8 @@ report.html
 data/raw/*
 data/processed/*
 data/incoming/*
+data/baseline_stats.json
+data/batches/*
 !data/raw/.gitkeep
 !data/processed/.gitkeep
 !data/incoming/.gitkeep

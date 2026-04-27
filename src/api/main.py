@@ -164,8 +164,8 @@ def model_info():
                 "accuracy":     m.get("accuracy", 0),
                 "macro_f1":     m.get("macro_f1", 0),
                 "weighted_f1":  m.get("weighted_f1", 0),
-                "val_accuracy": m.get("val_accuracy", 0),
-                "val_macro_f1": m.get("val_macro_f1", 0),
+                "val_accuracy": m.get("val_accuracy") or None,
+                "val_macro_f1": m.get("val_macro_f1") or None,
                 "run_id":       _v.run_id,
             }
         except Exception:

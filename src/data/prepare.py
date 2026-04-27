@@ -21,14 +21,30 @@ def load_params():
         return yaml.safe_load(f)
 
 
-def compute_baseline_stats(df: pd.DataFrame) -> dict:
-    """Reference statistics used later for drift detection."""
+def compute_baseline_stats(df: pd.DataFrame, sample_size: int = 500) -> dict:
+    """Reference statistics used later for drift detection.
+
+    Word frequencies are computed from a stratified sample (default 500 rows)
+    so the baseline distribution is calibrated to the same scale as the
+    DriftDetector's rolling window (200 texts) and Airflow batch CSVs.
+    Computing from all 40k+ texts would make the baseline too "smooth" and
+    cause in-distribution text to always look drifted.
+    """
     texts = df["text"].astype(str)
     lengths = texts.str.split().str.len()
 
-    # Word frequency (top-1000 vocabulary)
-    all_words = " ".join(texts.tolist()).split()
+    # Stratified sample for word-frequency baseline
+    sample_df = df.groupby("label", group_keys=False).apply(
+        lambda g: g.sample(
+            min(len(g), max(1, int(sample_size * len(g) / len(df)))),
+            random_state=42,
+        ),
+        include_groups=False,
+    ).reset_index(level=0)
+    sample_texts = sample_df["text"].astype(str)
+
     from collections import Counter
+    all_words = " ".join(sample_texts.tolist()).split()
     word_counts = Counter(all_words)
     top_words = dict(word_counts.most_common(1000))
     total = sum(top_words.values()) or 1

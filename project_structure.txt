@@ -1,0 +1,119 @@
+.
+├── MLproject
+├── README.md
+├── airflow
+│   ├── config
+│   └── dags
+│       ├── __pycache__
+│       └── data_prep_pipeline.py
+├── configs
+│   ├── alert_rules.yml
+│   ├── alertmanager.yml
+│   ├── grafana
+│   │   ├── dashboards
+│   │   │   └── main.json
+│   │   └── provisioning
+│   │       ├── dashboards
+│   │       │   └── dashboard.yml
+│   │       └── datasources
+│   │           └── prometheus.yml
+│   ├── prometheus.yml
+│   └── recording_rules.yml
+├── data
+│   ├── batches
+│   ├── incoming
+│   ├── incoming_archive
+│   │   ├── data.csv
+│   │   ├── demo_normal.csv
+│   │   ├── demo_ood.csv
+│   │   └── test_1777277647.csv
+│   ├── processed
+│   └── raw
+│       ├── data.csv.dvc
+│       └── mental_health.csv.dvc
+├── docker
+│   ├── airflow
+│   │   └── Dockerfile
+│   ├── fastapi
+│   │   ├── Dockerfile
+│   │   └── requirements.txt
+│   ├── mlflow
+│   │   └── Dockerfile
+│   ├── nginx
+│   │   └── nginx.conf
+│   └── streamlit
+│       ├── Dockerfile
+│       └── requirements.txt
+├── docker-compose.yml
+├── docs
+│   ├── experiment_report.md
+│   ├── hld.md
+│   ├── lld.md
+│   ├── test_cases.md
+│   ├── test_plan.md
+│   ├── test_report.md
+│   └── user_manual.md
+├── dvc.lock
+├── dvc.yaml
+├── metrics
+│   ├── linearsvc_confusion.png
+│   ├── linearsvc_metrics.json
+│   ├── logreg_confusion.png
+│   ├── logreg_metrics.json
+│   ├── xgboost_confusion.png
+│   └── xgboost_metrics.json
+├── mlflow
+├── models
+├── notebooks
+├── params.yaml
+├── project_structure.txt
+├── pytest.ini
+├── python_env.yaml
+├── requirements.txt
+├── scripts
+│   ├── drop_sample_csv.sh
+│   ├── load_tester.py
+│   ├── promote_model.py
+│   ├── sample_incoming.csv
+│   └── simulate_drift.py
+├── src
+│   ├── __init__.py
+│   ├── __pycache__
+│   ├── api
+│   │   ├── __init__.py
+│   │   ├── __pycache__
+│   │   ├── drift.py
+│   │   ├── main.py
+│   │   ├── metrics.py
+│   │   ├── model_client.py
+│   │   └── schemas.py
+│   ├── data
+│   │   ├── __init__.py
+│   │   ├── __pycache__
+│   │   ├── clean.py
+│   │   └── prepare.py
+│   ├── frontend
+│   │   ├── __init__.py
+│   │   └── app.py
+│   ├── training
+│   │   ├── __init__.py
+│   │   ├── __pycache__
+│   │   ├── features.py
+│   │   └── train.py
+│   └── utils
+│       └── __init__.py
+└── tests
+    ├── __init__.py
+    ├── __pycache__
+    ├── integration
+    │   ├── __init__.py
+    │   ├── __pycache__
+    │   └── test_api.py
+    └── unit
+        ├── __init__.py
+        ├── __pycache__
+        ├── test_clean.py
+        ├── test_drift.py
+        └── test_features.py
+
+45 directories, 72 files
