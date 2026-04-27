@@ -203,12 +203,17 @@ services:
       AIRFLOW__SMTP__SMTP_PASSWORD: ${MAILTRAP_PASS}
       AIRFLOW__SMTP__SMTP_MAIL_FROM: airflow@project.local
       ALERT_EMAIL: ${ALERT_EMAIL}
+      MLFLOW_TRACKING_URI: http://mlflow:5000
+      FEEDBACK_THRESHOLD: "10"
     volumes:
       - ./airflow/dags:/opt/airflow/dags
       - ./airflow/logs:/opt/airflow/logs
       - ./airflow/plugins:/opt/airflow/plugins
       - ./data:/opt/airflow/data
       - ./src:/opt/airflow/src
+      - ./params.yaml:/opt/airflow/params.yaml
+      - ./models:/opt/airflow/models
+      - ./metrics:/opt/airflow/metrics
     user: "root"
     entrypoint: /bin/bash
     command:
@@ -238,6 +243,9 @@ services:
       - ./airflow/plugins:/opt/airflow/plugins
       - ./data:/opt/airflow/data
       - ./src:/opt/airflow/src
+      - ./params.yaml:/opt/airflow/params.yaml
+      - ./models:/opt/airflow/models
+      - ./metrics:/opt/airflow/metrics
     user: "50000:0"
     depends_on:
       airflow-init:
@@ -258,6 +266,9 @@ services:
       - ./airflow/plugins:/opt/airflow/plugins
       - ./data:/opt/airflow/data
       - ./src:/opt/airflow/src
+      - ./params.yaml:/opt/airflow/params.yaml
+      - ./models:/opt/airflow/models
+      - ./metrics:/opt/airflow/metrics
     user: "50000:0"
     depends_on:
       airflow-init:

@@ -20,15 +20,26 @@ def main():
         print("No registered versions yet. Train first.")
         return
 
-    # Pick the version with the highest macro_f1 on the test set
+    # Pick the version with the highest macro_f1 among versions that have
+    # val_macro_f1 logged (i.e. trained with the proper validation split).
+    # Older versions without val metrics are excluded from promotion.
     best = None
     for v in versions:
         run = client.get_run(v.run_id)
-        f1 = run.data.metrics.get("macro_f1", 0.0)
+        m = run.data.metrics
+        val_f1 = m.get("val_macro_f1", 0.0)
+        f1 = m.get("macro_f1", 0.0)
         model_type = run.data.params.get("model_type", "?")
-        print(f"  v{v.version} ({model_type}) macro_f1={f1:.4f}")
+        if val_f1 == 0.0:
+            print(f"  v{v.version} ({model_type}) skipped — no val_macro_f1 (pre-val-split run)")
+            continue
+        print(f"  v{v.version} ({model_type}) macro_f1={f1:.4f}  val_macro_f1={val_f1:.4f}")
         if best is None or f1 > best[1]:
             best = (v, f1)
+
+    if best is None:
+        print("No eligible versions found (all lack val_macro_f1). Train first.")
+        return
 
     winner, best_f1 = best
     run = client.get_run(winner.run_id)

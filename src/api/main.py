@@ -53,7 +53,7 @@ log = logging.getLogger("api")
 CONTAINER_ID = socket.gethostname()
 BASELINE = os.getenv("BASELINE_STATS_PATH", "/app/data/baseline_stats.json")
 DRIFT_THRESHOLD = float(os.getenv("DRIFT_THRESHOLD", "0.3"))
-FEEDBACK_LOG = Path("/app/logs/feedback.log")
+FEEDBACK_LOG = Path(os.getenv("FEEDBACK_LOG_PATH", "/app/data/feedback.log"))
 FEEDBACK_LOG.parent.mkdir(parents=True, exist_ok=True)
 
 model_client = ModelClient()
@@ -238,6 +238,15 @@ def predict(req: PredictRequest):
     current_drift = drift_detector.compute()
     DRIFT_SCORE.set(current_drift)
 
+    log.info(
+        f"predict class={result['predicted_class']} "
+        f"conf={result['confidence']:.3f} "
+        f"latency_ms={elapsed * 1000:.1f} "
+        f"drift={current_drift:.3f}"
+    )
+    if current_drift > DRIFT_THRESHOLD:
+        log.warning(f"Drift threshold exceeded: {current_drift:.3f} > {DRIFT_THRESHOLD}")
+
     return PredictResponse(
         predicted_class=result["predicted_class"],
         confidence=result["confidence"],
@@ -273,4 +282,8 @@ def feedback(req: FeedbackRequest):
     with open(FEEDBACK_LOG, "a") as f:
         f.write(json.dumps(entry) + "\n")
 
+    log.info(
+        f"feedback was_correct={req.was_correct} "
+        f"predicted={req.predicted_label} correct={req.correct_label}"
+    )
     return FeedbackResponse(status="logged")

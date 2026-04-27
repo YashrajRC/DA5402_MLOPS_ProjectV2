@@ -4,86 +4,43 @@
 
 ```mermaid
 graph TB
-    subgraph Host["Host Machine (WSL2 / Linux)"]
+    User([End User])
 
-        subgraph DataLayer["Data & Training Layer"]
-
-            subgraph Airflow["Airflow  :8080"]
-                AF_SCH[Scheduler]
-                AF_WEB[Webserver]
-                AF_PG[(Postgres)]
-                AF_SCH --- AF_WEB
-                AF_SCH --- AF_PG
-            end
-
-            FS[("data/incoming/\n*.csv")]
-            BATCHES[("data/batches/\ncleaned CSVs")]
-            CLEAN_FN["src/data/clean.py\nclean_text()"]
-
-            subgraph DVCPipeline["DVC Pipeline  (dvc repro)"]
-                PREP["prepare\nclean + split + baseline"]
-                TR_LR[train_logreg]
-                TR_SV[train_linearsvc]
-                TR_XG[train_xgboost]
-                PROMO[promote]
-                PREP --> TR_LR & TR_SV & TR_XG --> PROMO
-            end
-
-            RAW[("data/raw/data.csv")]
-            PROC[("data/processed/\ntrain.csv  test.csv")]
-            BASE[("data/baseline_stats.json")]
-
-            RAW --> PREP
-            PREP -->|"split"| PROC
-            PREP -->|"500-text sample"| BASE
-            CLEAN_FN -->|"used by"| PREP
-            CLEAN_FN -->|"used by"| AF_SCH
-
-            FS -->|"FileSensor"| AF_SCH
-            AF_SCH -->|"validate → clean → drift → archive"| BATCHES
-            BASE -->|"drift baseline\nfor detect_drift task"| AF_SCH
-            PROC -->|"retraining data\nfor dvc repro"| DVCPipeline
-            BATCHES -.->|"accumulated batches\nfeed next retrain"| DVCPipeline
-        end
-
-        subgraph Registry["Experiment & Model Registry  :5000"]
-            MLFLOW[MLflow Server]
-            MLDB[(mlflow.db)]
-            MLRUNS[("mlruns/ artifacts")]
-            MLFLOW --- MLDB
-            MLFLOW --- MLRUNS
-        end
-
-        subgraph Serving["Serving Layer"]
-            NGINX["Nginx\nLoad Balancer :8000"]
-            API1[FastAPI Replica 1]
-            API2[FastAPI Replica 2]
-            API3[FastAPI Replica 3]
-            NGINX --> API1 & API2 & API3
-        end
-
-        subgraph Frontend["Frontend  :8501"]
-            ST[Streamlit UI]
-        end
-
-        subgraph Observability["Observability"]
-            PROM["Prometheus :9090"]
-            GRAF["Grafana :3001"]
-            ALERT["AlertManager :9093"]
-            NODE["Node Exporter :9100"]
-            PROM --> GRAF
-            PROM --> ALERT
-            NODE --> PROM
-        end
+    subgraph Ingest["Data Ingestion  —  Airflow :8080"]
+        AF["FileSensor → validate → clean\n→ drift detect → archive → notify"]
     end
 
-    PROMO -->|"set champion alias"| MLFLOW
-    MLFLOW -->|"download bundle at startup"| API1 & API2 & API3
-    BASE -->|"baseline_stats.json\nfor live drift"| API1 & API2 & API3
-    API1 & API2 & API3 -->|"/metrics"| PROM
-    ST -->|"REST"| NGINX
-    User([End User]) --> ST
-    User --> NGINX
+    subgraph Train["Training Pipeline  —  run once, cached by DVC"]
+        DVC["DVC  (dvc repro)\nonly re-runs stages whose\ndeps or params changed"]
+        MLB["MLflow  :5000\nexperiment tracking\nmodel registry"]
+        DVC -->|"log metrics & bundles\nregister versions"| MLB
+    end
+
+    BASE[("baseline_stats.json\nshared drift baseline")]
+
+    subgraph Serve["Serving  —  Nginx :8000"]
+        FA["FastAPI × 3 replicas\npredict · feedback · metrics\nlive drift detection"]
+    end
+
+    subgraph Observe["Observability"]
+        PR["Prometheus  :9090"]
+        GR["Grafana  :3001"]
+        AM["AlertManager  :9093"]
+        PR --> GR
+        PR --> AM
+    end
+
+    ST["Streamlit  :8501"]
+
+    DVC -->|"produces"| BASE
+    BASE -->|"batch drift baseline"| AF
+    BASE -->|"live drift baseline"| FA
+    AF -->|"cleaned batches\ntrigger retraining when needed"| DVC
+    MLB -->|"champion model bundle\nloaded at startup"| FA
+    FA -->|"/metrics scrape"| PR
+    User --> ST
+    ST -->|"REST via Nginx"| Serve
+    User -->|"REST"| Serve
 ```
 
 ---
@@ -91,45 +48,43 @@ graph TB
 ## 2. Data Flow
 
 ```mermaid
-flowchart TD
-    RAW([data/raw/data.csv]) -->|"dvc repro prepare\nsrc/data/prepare.py"| PREP
+flowchart LR
+    RAW([("data/raw/data.csv\nKaggle dataset")])
 
-    subgraph PREP["prepare stage  —  both paths share clean_text()"]
-        direction LR
-        CT["clean_text()\nlowercase, strip URLs\nstrip mentions"]
+    subgraph DVC["DVC Pipeline  —  stage-cached, only reruns on change"]
+        PREP["prepare\nclean · split · compute baseline\n─────────────────\nout: train.csv · test.csv\n     baseline_stats.json"]
+        LR["train_logreg\nTF-IDF + handcrafted → LogReg\nval split 15% · logs to MLflow"]
+        SV["train_linearsvc\nTF-IDF + handcrafted → SVC\nval split 15% · logs to MLflow"]
+        XG["train_xgboost\nTF-IDF + handcrafted → XGBoost\nval split 15% · logs to MLflow"]
+        PRO["promote\npick best macro-F1\nset champion alias"]
+        PREP --> LR & SV & XG --> PRO
     end
 
-    PREP -->|"train.csv 42k\ntest.csv 10k"| PROC[("data/processed/")]
-    PREP -->|"500-text stratified\nsample"| BASE[("data/baseline_stats.json\nword_freq_top1000")]
+    RAW --> PREP
+    PRO -->|"champion alias"| MLB[(MLflow\nRegistry)]
+    PREP -->|"baseline_stats.json"| BASE[("baseline_stats.json")]
 
-    PROC --> FEAT["Feature Engineering\nWord TF-IDF 30k\nChar TF-IDF 10k\nHandcrafted 12"]
-    FEAT --> TRAIN["Model Training\nLogreg / LinearSVC / XGBoost\n15% val split"]
-    TRAIN -->|"bundles + metrics"| MLFLOW[(MLflow Registry)]
-    MLFLOW -->|"champion alias"| API["FastAPI × 3 Replicas"]
+    INCOMING([("data/incoming/*.csv\nnew data batches")])
 
-    INCOMING([data/incoming/*.csv]) -->|"Airflow FileSensor\nevery 10 min"| AFVAL
-
-    subgraph AFPIPE["Airflow data_prep_pipeline  —  same clean_text()"]
-        direction LR
-        AFVAL["validate_csv\ncheck columns & rows"]
-        AFCLEAN["clean_and_stats\nclean_text() + batch stats"]
-        AFDRIFT["detect_drift\nJS divergence vs baseline"]
-        AFARCH["archive"]
-        AFVAL --> AFCLEAN --> AFDRIFT --> AFARCH
+    subgraph AF["Airflow  —  data_prep_pipeline  (every 10 min)"]
+        V[validate] --> C[clean] --> D["detect drift\nJSD vs baseline"] --> A[archive]
     end
 
-    BASE -->|"drift baseline\nshared with Airflow"| AFDRIFT
-    AFCLEAN -->|"cleaned CSV\ndata/batches/"| BATCHES[("data/batches/\naccumulated batches")]
-    BATCHES -.->|"feed next\ndvc repro"| PROC
-    AFDRIFT -->|"score > 0.3?"| NOTIFY{"Alert?"}
-    NOTIFY -->|"Yes"| EMAIL["Email / Log\nnotification"]
-    NOTIFY -->|"No"| STATS["Stats report\nemail / log"]
+    INCOMING -->|"FileSensor"| AF
+    BASE -->|"drift baseline"| D
+    C -.->|"cleaned batches\nfor future retraining"| PREP
 
-    API -->|"prediction + confidence"| USER([End User])
-    USER -->|"text input"| API
-    BASE -->|"baseline for\nlive drift"| API
-    API -->|"rolling 200-text\nJSD score"| PROM[(Prometheus)]
-    PROM --> GRAF[Grafana Dashboard]
+    MLB -->|"champion bundle"| FA2
+
+    subgraph FA2["FastAPI × 3  (Nginx :8000)"]
+        P["/predict · /feedback\n/metrics · /model_info"]
+    end
+
+    BASE -->|"live drift baseline"| FA2
+    User([User]) <-->|"text in\nclass + confidence out"| FA2
+    FA2 -->|"metrics"| PR[Prometheus\n:9090]
+    PR --> GR[Grafana\n:3001]
+    PR -->|"fire alerts"| AM[AlertManager\n:9093]
 ```
 
 ---

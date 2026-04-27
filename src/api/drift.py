@@ -3,11 +3,14 @@ Drift detection: compares rolling window of recent inputs to baseline stats.
 Uses Jensen-Shannon distance on word-frequency distributions.
 """
 import json
+import logging
 import math
 from collections import Counter, deque
 from pathlib import Path
 from threading import Lock
 from typing import Optional
+
+log = logging.getLogger("api.drift")
 
 
 class DriftDetector:
@@ -23,6 +26,9 @@ class DriftDetector:
         if self.baseline_path.exists():
             with open(self.baseline_path) as f:
                 self.baseline = json.load(f)
+            log.info(f"Drift baseline loaded from {self.baseline_path}")
+        else:
+            log.warning(f"Drift baseline not found: {self.baseline_path}")
 
     def add_text(self, text: str):
         with self.lock:

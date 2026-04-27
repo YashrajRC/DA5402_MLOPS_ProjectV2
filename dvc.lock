@@ -13,8 +13,8 @@ stages:
       size: 653
     - path: src/data/prepare.py
       hash: md5
-      md5: 18219a0f0f21f59d0e6e7931f3630764
-      size: 2912
+      md5: 118aa6264cac996912a4cbd944f58ba3
+      size: 3615
     params:
       params.yaml:
         prepare:
@@ -24,8 +24,8 @@ stages:
     outs:
     - path: data/baseline_stats.json
       hash: md5
-      md5: 0036493dd4f860f756afc1dd37287721
-      size: 37023
+      md5: d18f9d1ef1c85a024a9ddac25de1a0ae
+      size: 37021
     - path: data/processed/test.csv
       hash: md5
       md5: a36ae63510b24808a41cec6d0b6443be
@@ -34,3 +34,180 @@ stages:
       hash: md5
       md5: 57ccf75659460f5c137baf448d462cf1
       size: 24877158
+  train_logreg:
+    cmd: docker compose exec -T trainer mlflow run /app -e train -P model=logreg
+      --env-manager local --experiment-name mental_health_classifier
+    deps:
+    - path: MLproject
+      hash: md5
+      md5: 8f6bffd7b1361fcbc293fae5090c6688
+      size: 339
+    - path: data/processed/test.csv
+      hash: md5
+      md5: a36ae63510b24808a41cec6d0b6443be
+      size: 6182950
+    - path: data/processed/train.csv
+      hash: md5
+      md5: 57ccf75659460f5c137baf448d462cf1
+      size: 24877158
+    - path: src/training/features.py
+      hash: md5
+      md5: f63f636c3d2c45959ab85d10568c7c77
+      size: 2281
+    - path: src/training/train.py
+      hash: md5
+      md5: 3b46d4103b32f3b020e73880c7b52cd7
+      size: 10643
+    params:
+      params.yaml:
+        features:
+          max_tfidf_features: 30000
+          ngram_range:
+          - 1
+          - 3
+          max_tfidf_char_features: 10000
+          char_ngram_range:
+          - 3
+          - 4
+          min_df: 2
+          max_df: 0.95
+        train.logreg:
+          C: 2.0
+          max_iter: 2000
+          solver: liblinear
+          penalty: l2
+    outs:
+    - path: metrics/logreg_metrics.json
+      hash: md5
+      md5: 7a185251a30ff1f2fba79691f0415af5
+      size: 230
+    - path: models/logreg_bundle.joblib
+      hash: md5
+      md5: 522118c6a7850d5687cba853deae9127
+      size: 4628569
+  train_linearsvc:
+    cmd: docker compose exec -T trainer mlflow run /app -e train -P 
+      model=linearsvc --env-manager local --experiment-name 
+      mental_health_classifier
+    deps:
+    - path: MLproject
+      hash: md5
+      md5: 8f6bffd7b1361fcbc293fae5090c6688
+      size: 339
+    - path: data/processed/test.csv
+      hash: md5
+      md5: a36ae63510b24808a41cec6d0b6443be
+      size: 6182950
+    - path: data/processed/train.csv
+      hash: md5
+      md5: 57ccf75659460f5c137baf448d462cf1
+      size: 24877158
+    - path: src/training/features.py
+      hash: md5
+      md5: f63f636c3d2c45959ab85d10568c7c77
+      size: 2281
+    - path: src/training/train.py
+      hash: md5
+      md5: 3b46d4103b32f3b020e73880c7b52cd7
+      size: 10643
+    params:
+      params.yaml:
+        features:
+          max_tfidf_features: 30000
+          ngram_range:
+          - 1
+          - 3
+          max_tfidf_char_features: 10000
+          char_ngram_range:
+          - 3
+          - 4
+          min_df: 2
+          max_df: 0.95
+        train.linearsvc:
+          C: 0.5
+          max_iter: 2000
+    outs:
+    - path: metrics/linearsvc_metrics.json
+      hash: md5
+      md5: e14a79639f339f4ed7ec135d3290b390
+      size: 231
+    - path: models/linearsvc_bundle.joblib
+      hash: md5
+      md5: 1031354d12d4c57b212f8963df22e975
+      size: 9112925
+  train_xgboost:
+    cmd: docker compose exec -T trainer mlflow run /app -e train -P 
+      model=xgboost --env-manager local --experiment-name 
+      mental_health_classifier
+    deps:
+    - path: MLproject
+      hash: md5
+      md5: 8f6bffd7b1361fcbc293fae5090c6688
+      size: 339
+    - path: data/processed/test.csv
+      hash: md5
+      md5: a36ae63510b24808a41cec6d0b6443be
+      size: 6182950
+    - path: data/processed/train.csv
+      hash: md5
+      md5: 57ccf75659460f5c137baf448d462cf1
+      size: 24877158
+    - path: src/training/features.py
+      hash: md5
+      md5: f63f636c3d2c45959ab85d10568c7c77
+      size: 2281
+    - path: src/training/train.py
+      hash: md5
+      md5: 3b46d4103b32f3b020e73880c7b52cd7
+      size: 10643
+    params:
+      params.yaml:
+        features:
+          max_tfidf_features: 30000
+          ngram_range:
+          - 1
+          - 3
+          max_tfidf_char_features: 10000
+          char_ngram_range:
+          - 3
+          - 4
+          min_df: 2
+          max_df: 0.95
+        train.xgboost:
+          n_estimators: 250
+          max_depth: 4
+          learning_rate: 0.15
+          reg_alpha: 0.1
+          reg_lambda: 1.0
+          subsample: 0.85
+          colsample_bytree: 0.85
+          min_child_weight: 3
+          tree_method: hist
+    outs:
+    - path: metrics/xgboost_metrics.json
+      hash: md5
+      md5: 8e71ad7cb367389f66703367cdc5bab7
+      size: 230
+    - path: models/xgboost_bundle.joblib
+      hash: md5
+      md5: ed37327d3aba5255860c3cac83e33880
+      size: 4897963
+  promote:
+    cmd: docker compose exec -T trainer python /app/scripts/promote_model.py
+    deps:
+    - path: metrics/linearsvc_metrics.json
+      hash: md5
+      md5: e14a79639f339f4ed7ec135d3290b390
+      size: 231
+    - path: metrics/logreg_metrics.json
+      hash: md5
+      md5: 7a185251a30ff1f2fba79691f0415af5
+      size: 230
+    - path: metrics/xgboost_metrics.json
+      hash: md5
+      md5: 8e71ad7cb367389f66703367cdc5bab7
+      size: 230
+    - path: scripts/promote_model.py
+      hash: md5
+      md5: 233cca9decd8d91b48db7f4e69ce2783
+      size: 2654
