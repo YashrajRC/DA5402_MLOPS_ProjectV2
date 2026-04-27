@@ -1,0 +1,60 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  # ── Job 1: Unit tests (no Docker needed) ──────────────────────────────────
+  unit-tests:
+    name: Unit Tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          pip install \
+            pandas==2.2.3 numpy==1.26.4 scikit-learn==1.5.2 scipy==1.14.1 \
+            xgboost==2.1.1 nltk==3.9.1 textstat==0.7.4 vaderSentiment==3.3.2 \
+            joblib==1.4.2 pytest==8.3.3 requests==2.32.3
+
+      - name: Download NLTK data
+        run: python -m nltk.downloader stopwords punkt punkt_tab
+
+      - name: Run unit tests
+        run: pytest tests/unit/ -v
+
+  # ── Job 2: Validate all Docker images build without errors ─────────────────
+  docker-build:
+    name: Docker Build Validation
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Create .env from example (dummy values for compose validation)
+        run: sed 's/=your_.*/=ci_dummy/' .env.example > .env
+
+      - name: Validate docker compose config
+        run: docker compose config --quiet
+
+      - name: Build FastAPI / Trainer image
+        run: docker build -f docker/fastapi/Dockerfile -t fastapi-test .
+
+      - name: Build Airflow image
+        run: docker build -f docker/airflow/Dockerfile -t airflow-test .
+
+      - name: Build Streamlit image
+        run: docker build -f docker/streamlit/Dockerfile -t streamlit-test .
+
+      - name: Build MLflow image
+        run: docker build -f docker/mlflow/Dockerfile -t mlflow-test .

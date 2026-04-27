@@ -6,17 +6,41 @@ services:
     ports:
       - "5000:5000"
     volumes:
-      - ./mlruns:/mlflow/mlruns
-      - ./models:/mlflow/models
+      - ./mlruns:/mlruns
+    working_dir: /mlruns
     command: >
       mlflow server
       --host 0.0.0.0
       --port 5000
-      --backend-store-uri sqlite:////mlflow/mlflow.db
-      --default-artifact-root /mlflow/mlruns
+      --backend-store-uri sqlite:////mlruns/mlflow.db
+      --artifacts-destination /mlruns
       --serve-artifacts
     restart: unless-stopped
     networks: [appnet]
+
+  # ═══════════════════ Trainer (runs dvc/mlflow run commands) ═══════════════════
+  trainer:
+    build:
+      context: .
+      dockerfile: docker/fastapi/Dockerfile
+    container_name: trainer
+    environment:
+      MLFLOW_TRACKING_URI: http://mlflow:5000
+      PYTHONPATH: /app
+    volumes:
+      - ./src:/app/src
+      - ./scripts:/app/scripts
+      - ./data:/app/data
+      - ./models:/app/models
+      - ./metrics:/app/metrics
+      - ./params.yaml:/app/params.yaml
+      - ./MLproject:/app/MLproject
+      - ./python_env.yaml:/app/python_env.yaml
+      - ./requirements.txt:/app/requirements.txt
+    depends_on:
+      - mlflow
+    networks: [appnet]
+    command: tail -f /dev/null
 
   # ═══════════════════ FastAPI (3 replicas) ═══════════════════
   fastapi:
@@ -33,6 +57,7 @@ services:
       - ./src:/app/src
       - ./data:/app/data
       - ./models:/app/models
+      - ./metrics:/app/metrics 
       - feedback-logs:/app/logs
     depends_on:
       - mlflow
@@ -96,6 +121,15 @@ services:
     ports:
       - "9100:9100"
     pid: host
+    volumes:
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /:/rootfs:ro
+    command:
+      - '--path.procfs=/host/proc'
+      - '--path.rootfs=/rootfs'
+      - '--path.sysfs=/host/sys'
+      - '--collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc)($$|/)'
     restart: unless-stopped
     networks: [appnet]
 
@@ -112,13 +146,13 @@ services:
     networks: [appnet]
 
   grafana:
-    image: grafana/grafana:latest
+    image: grafana/grafana:11.4.0
     container_name: grafana
     ports:
-      - "3000:3000"
+      - "3001:3000"
     environment:
       GF_SECURITY_ADMIN_USER: admin
-      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin123
       GF_AUTH_ANONYMOUS_ENABLED: "true"
     volumes:
       - ./configs/grafana/provisioning:/etc/grafana/provisioning
@@ -128,6 +162,7 @@ services:
       - prometheus
     restart: unless-stopped
     networks: [appnet]
+
 
   # ═══════════════════ Airflow ═══════════════════
   airflow-postgres:
@@ -159,6 +194,7 @@ services:
       AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@airflow-postgres/airflow
       AIRFLOW__CORE__LOAD_EXAMPLES: "false"
       AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: "false"
+      AIRFLOW__API__AUTH_BACKENDS: "airflow.api.auth.backend.basic_auth"
       AIRFLOW__SMTP__SMTP_HOST: sandbox.smtp.mailtrap.io
       AIRFLOW__SMTP__SMTP_STARTTLS: "true"
       AIRFLOW__SMTP__SMTP_SSL: "false"
@@ -173,14 +209,19 @@ services:
       - ./airflow/plugins:/opt/airflow/plugins
       - ./data:/opt/airflow/data
       - ./src:/opt/airflow/src
-    user: "50000:0"
+    user: "root"
     entrypoint: /bin/bash
     command:
       - -c
       - |
+        set -e
+        mkdir -p /opt/airflow/logs/scheduler /opt/airflow/logs/dag_processor_manager
         airflow db migrate
-        airflow users create --username admin --password admin --firstname Admin --lastname User --role Admin --email admin@example.com || true
+        airflow users create --username admin --password admin --firstname Admin --lastname User --role Admin --email admin@example.com 2>/dev/null || true
         airflow pools set data_prep_pool 3 "Throttle data prep tasks" || true
+        airflow connections add fs_default --conn-type fs 2>/dev/null || true
+        chown -R 50000:0 /opt/airflow/logs
+        chmod -R 777 /opt/airflow/logs
     networks: [appnet]
 
   airflow-webserver:

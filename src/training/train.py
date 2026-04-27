@@ -1,12 +1,9 @@
 """
 Training entry point for all 3 models.
-Logs parameters, metrics, and model artifacts to MLflow.
-Also writes a metrics JSON for DVC.
+Called via: mlflow run . -e train -P model=<logreg|linearsvc|xgboost>
 
-Usage:
-    python src/training/train.py --model logreg
-    python src/training/train.py --model linearsvc
-    python src/training/train.py --model xgboost
+Logs parameters, metrics, and model artifacts to MLflow.
+Writes a metrics JSON for DVC.
 """
 import argparse
 import json
@@ -23,7 +20,9 @@ import mlflow.xgboost
 import numpy as np
 import pandas as pd
 import yaml
+from scipy.sparse import csr_matrix, hstack
 from sklearn.calibration import CalibratedClassifierCV
+from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import (
     accuracy_score,
@@ -31,12 +30,11 @@ from sklearn.metrics import (
     confusion_matrix,
     f1_score,
 )
-from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import LabelEncoder
 from sklearn.svm import LinearSVC
 from xgboost import XGBClassifier
 
-from src.training.features import HandcraftedFeatures, build_tfidf, combine_features
+from src.training.features import HandcraftedFeatures
 
 ROOT = Path(__file__).resolve().parents[2]
 TRAIN = ROOT / "data" / "processed" / "train.csv"
@@ -53,24 +51,38 @@ def load_params():
 def make_classifier(kind: str, params: dict):
     if kind == "logreg":
         return LogisticRegression(
-            C=params["C"], max_iter=params["max_iter"],
-            class_weight="balanced", n_jobs=-1,
+            C=params["C"],
+            max_iter=params["max_iter"],
+            solver=params.get("solver", "liblinear"),
+            penalty=params.get("penalty", "l2"),
+            class_weight="balanced",
         )
     if kind == "linearsvc":
-        base = LinearSVC(C=params["C"], max_iter=params["max_iter"], class_weight="balanced")
+        base = LinearSVC(
+            C=params["C"],
+            max_iter=params["max_iter"],
+            class_weight="balanced",
+        )
         return CalibratedClassifierCV(base, cv=3)
     if kind == "xgboost":
         return XGBClassifier(
             n_estimators=params["n_estimators"],
             max_depth=params["max_depth"],
             learning_rate=params["learning_rate"],
-            n_jobs=-1, eval_metric="mlogloss",
+            reg_alpha=params.get("reg_alpha", 0),
+            reg_lambda=params.get("reg_lambda", 1),
+            subsample=params.get("subsample", 1.0),
+            colsample_bytree=params.get("colsample_bytree", 1.0),
+            min_child_weight=params.get("min_child_weight", 1),
+            tree_method=params.get("tree_method", "hist"),
+            n_jobs=-1,
+            eval_metric="mlogloss",
         )
     raise ValueError(f"Unknown model: {kind}")
 
 
 def plot_confusion(cm, labels, out_path):
-    fig, ax = plt.subplots(figsize=(8, 7))
+    fig, ax = plt.subplots(figsize=(9, 8))
     im = ax.imshow(cm, interpolation="nearest", cmap="Blues")
     ax.set_xticks(range(len(labels)))
     ax.set_yticks(range(len(labels)))
@@ -81,8 +93,11 @@ def plot_confusion(cm, labels, out_path):
     ax.set_title("Confusion Matrix")
     for i in range(len(labels)):
         for j in range(len(labels)):
-            ax.text(j, i, cm[i, j], ha="center", va="center",
-                    color="white" if cm[i, j] > cm.max() / 2 else "black")
+            ax.text(
+                j, i, cm[i, j],
+                ha="center", va="center",
+                color="white" if cm[i, j] > cm.max() / 2 else "black",
+            )
     plt.colorbar(im)
     plt.tight_layout()
     plt.savefig(out_path, dpi=120)
@@ -102,65 +117,133 @@ def main():
     METRICS_DIR.mkdir(parents=True, exist_ok=True)
 
     mlflow.set_tracking_uri(os.getenv("MLFLOW_TRACKING_URI", "http://localhost:5000"))
-    mlflow.set_experiment("mental_health_classifier")
+    from mlflow.tracking import MlflowClient
 
-    print(f"Loading data...")
+    client = MlflowClient()
+    exp_name = "mental_health_classifier"
+
+    exp = client.get_experiment_by_name(exp_name)
+    if exp is None:
+        exp_id = client.create_experiment(exp_name)
+    else:
+        exp_id = exp.experiment_id
+
+    mlflow.set_experiment(exp_name)
+
+    print("Loading data...")
     train_df = pd.read_csv(TRAIN)
     test_df = pd.read_csv(TEST)
 
-    le = LabelEncoder()
-    y_train = le.fit_transform(train_df["label"].astype(str))
-    y_test = le.transform(test_df["label"].astype(str))
-    labels = list(le.classes_)
+    # Split off a validation set from training data (15%)
+    from sklearn.model_selection import StratifiedShuffleSplit
+    sss = StratifiedShuffleSplit(n_splits=1, test_size=0.15,
+                                 random_state=params["prepare"]["random_state"])
+    idx_train, idx_val = next(sss.split(train_df, train_df["label"]))
+    inner_df = train_df.iloc[idx_train].reset_index(drop=True)
+    val_df   = train_df.iloc[idx_val].reset_index(drop=True)
+    print(f"Inner train: {len(inner_df)}  Val: {len(val_df)}  Test: {len(test_df)}")
 
-    print(f"Building features...")
-    tfidf = build_tfidf(feat_params["max_tfidf_features"], feat_params["ngram_range"])
+    le = LabelEncoder()
+    y_inner = le.fit_transform(inner_df["label"].astype(str))
+    y_val   = le.transform(val_df["label"].astype(str))
+    y_test  = le.transform(test_df["label"].astype(str))
+    labels  = list(le.classes_)
+
+    print("Building features (fit on inner train)...")
+    # Word-level TF-IDF
+    tfidf_word = TfidfVectorizer(
+        max_features=feat_params["max_tfidf_features"],
+        ngram_range=tuple(feat_params["ngram_range"]),
+        min_df=feat_params["min_df"],
+        max_df=feat_params["max_df"],
+        sublinear_tf=True,
+        stop_words="english",
+    )
+    # Char-level TF-IDF (catches misspellings, affixes)
+    tfidf_char = TfidfVectorizer(
+        max_features=feat_params["max_tfidf_char_features"],
+        ngram_range=tuple(feat_params["char_ngram_range"]),
+        min_df=feat_params["min_df"],
+        max_df=feat_params["max_df"],
+        sublinear_tf=True,
+        analyzer="char_wb",
+    )
+
     hf = HandcraftedFeatures()
 
-    tfidf_train = tfidf.fit_transform(train_df["text"].astype(str))
-    tfidf_test = tfidf.transform(test_df["text"].astype(str))
-    hf_train = hf.fit_transform(train_df["text"].tolist())
-    hf_test = hf.transform(test_df["text"].tolist())
+    word_inner = tfidf_word.fit_transform(inner_df["text"].astype(str))
+    word_val   = tfidf_word.transform(val_df["text"].astype(str))
+    word_test  = tfidf_word.transform(test_df["text"].astype(str))
 
-    X_train = combine_features(tfidf_train, hf_train)
-    X_test = combine_features(tfidf_test, hf_test)
+    char_inner = tfidf_char.fit_transform(inner_df["text"].astype(str))
+    char_val   = tfidf_char.transform(val_df["text"].astype(str))
+    char_test  = tfidf_char.transform(test_df["text"].astype(str))
+
+    hf_inner = hf.fit_transform(inner_df["text"].tolist())
+    hf_val   = hf.transform(val_df["text"].tolist())
+    hf_test  = hf.transform(test_df["text"].tolist())
+
+    X_inner = hstack([word_inner, char_inner, csr_matrix(hf_inner)])
+    X_val   = hstack([word_val,   char_val,   csr_matrix(hf_val)])
+    X_test  = hstack([word_test,  char_test,  csr_matrix(hf_test)])
+
+    print(f"Feature matrix: {X_inner.shape}")
 
     clf = make_classifier(args.model, model_params)
 
-    with mlflow.start_run(run_name=f"{args.model}") as run:
+    with mlflow.start_run(run_name=args.model) as run:
         mlflow.log_params({**model_params, **feat_params, "model_type": args.model})
+        mlflow.log_param("n_features", X_inner.shape[1])
+        mlflow.log_param("n_train_inner", X_inner.shape[0])
+        mlflow.log_param("n_val", X_val.shape[0])
+        mlflow.log_param("n_test", X_test.shape[0])
 
-        print(f"Training {args.model}...")
-        clf.fit(X_train, y_train)
+        # ── Train on inner split ──────────────────────────────────────────
+        print(f"Training {args.model} on inner split ({X_inner.shape[0]} samples)...")
+        clf.fit(X_inner, y_inner)
 
-        y_pred = clf.predict(X_test)
+        # ── Validation metrics ────────────────────────────────────────────
+        y_val_pred = clf.predict(X_val)
+        val_acc      = accuracy_score(y_val, y_val_pred)
+        val_f1_macro = f1_score(y_val, y_val_pred, average="macro")
+        val_f1_w     = f1_score(y_val, y_val_pred, average="weighted")
+        print(f"  Val  → acc={val_acc:.4f}  macro-F1={val_f1_macro:.4f}  weighted-F1={val_f1_w:.4f}")
+        mlflow.log_metrics({
+            "val_accuracy": val_acc,
+            "val_macro_f1": val_f1_macro,
+            "val_weighted_f1": val_f1_w,
+        })
 
-        acc = accuracy_score(y_test, y_pred)
-        f1_macro = f1_score(y_test, y_pred, average="macro")
-        f1_weighted = f1_score(y_test, y_pred, average="weighted")
-
-        print(f"Accuracy: {acc:.4f}  Macro-F1: {f1_macro:.4f}  Weighted-F1: {f1_weighted:.4f}")
-
+        # ── Test metrics (held-out) ────────────────────────────────────────
+        y_pred        = clf.predict(X_test)
+        acc           = accuracy_score(y_test, y_pred)
+        f1_macro      = f1_score(y_test, y_pred, average="macro")
+        f1_weighted   = f1_score(y_test, y_pred, average="weighted")
+        print(f"  Test → acc={acc:.4f}  macro-F1={f1_macro:.4f}  weighted-F1={f1_weighted:.4f}")
         mlflow.log_metrics({
             "accuracy": acc,
             "macro_f1": f1_macro,
             "weighted_f1": f1_weighted,
         })
 
-        # Per-class F1
-        report = classification_report(y_test, y_pred, target_names=labels, output_dict=True, zero_division=0)
+        report = classification_report(
+            y_test, y_pred, target_names=labels, output_dict=True, zero_division=0
+        )
         for label in labels:
-            mlflow.log_metric(f"f1_{label}", report[label]["f1-score"])
+            mlflow.log_metric(f"f1_{label.replace(' ', '_')}", report[label]["f1-score"])
 
-        # Confusion matrix artifact
+        # Confusion matrix on test set
         cm = confusion_matrix(y_test, y_pred)
         cm_path = METRICS_DIR / f"{args.model}_confusion.png"
         plot_confusion(cm, labels, cm_path)
         mlflow.log_artifact(str(cm_path))
 
-        # Save & log the full pipeline artifacts
+        # ── Save bundle: transformers are already fit on inner split ───────
+        # This is intentional — inner-split features are slightly conservative;
+        # for production re-training on full data, re-run with updated data.
         bundle = {
-            "tfidf": tfidf,
+            "tfidf_word": tfidf_word,
+            "tfidf_char": tfidf_char,
             "handcrafted": hf,
             "classifier": clf,
             "label_encoder": le,
@@ -171,21 +254,27 @@ def main():
         joblib.dump(bundle, bundle_path)
         mlflow.log_artifact(str(bundle_path), artifact_path="model_bundle")
 
-        # Also register as MLflow sklearn model for model-registry workflow
+        # Register model in MLflow registry
         if args.model == "xgboost":
-            mlflow.xgboost.log_model(clf, artifact_path="model",
-                                     registered_model_name="mental_health_classifier")
+            mlflow.xgboost.log_model(
+                clf, artifact_path="model",
+                registered_model_name="mental_health_classifier",
+            )
         else:
-            mlflow.sklearn.log_model(clf, artifact_path="model",
-                                     registered_model_name="mental_health_classifier")
+            mlflow.sklearn.log_model(
+                clf, artifact_path="model",
+                registered_model_name="mental_health_classifier",
+            )
 
-        # DVC metric JSON
+        # DVC metric JSON (uses test metrics for model comparison)
         metrics_out = METRICS_DIR / f"{args.model}_metrics.json"
         with open(metrics_out, "w") as f:
             json.dump({
                 "accuracy": acc,
                 "macro_f1": f1_macro,
                 "weighted_f1": f1_weighted,
+                "val_accuracy": val_acc,
+                "val_macro_f1": val_f1_macro,
                 "run_id": run.info.run_id,
             }, f, indent=2)
 

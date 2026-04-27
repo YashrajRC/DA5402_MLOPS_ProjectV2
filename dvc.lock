@@ -1,0 +1,36 @@
+schema: '2.0'
+stages:
+  prepare:
+    cmd: docker compose exec -T trainer python -m src.data.prepare
+    deps:
+    - path: data/raw/data.csv
+      hash: md5
+      md5: 1b946c8c12666c859a051a89893469b1
+      size: 31469558
+    - path: src/data/clean.py
+      hash: md5
+      md5: afac3cf9324d9a85be6e1052d55b4eae
+      size: 653
+    - path: src/data/prepare.py
+      hash: md5
+      md5: 18219a0f0f21f59d0e6e7931f3630764
+      size: 2912
+    params:
+      params.yaml:
+        prepare:
+          test_size: 0.2
+          random_state: 42
+          min_text_length: 3
+    outs:
+    - path: data/baseline_stats.json
+      hash: md5
+      md5: 0036493dd4f860f756afc1dd37287721
+      size: 37023
+    - path: data/processed/test.csv
+      hash: md5
+      md5: a36ae63510b24808a41cec6d0b6443be
+      size: 6182950
+    - path: data/processed/train.csv
+      hash: md5
+      md5: 57ccf75659460f5c137baf448d462cf1
+      size: 24877158

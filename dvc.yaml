@@ -1,6 +1,6 @@
 stages:
   prepare:
-    cmd: python src/data/prepare.py
+    cmd: docker compose exec -T trainer python -m src.data.prepare
     deps:
       - src/data/prepare.py
       - src/data/clean.py
@@ -13,43 +13,63 @@ stages:
       - data/baseline_stats.json
 
   train_logreg:
-    cmd: python src/training/train.py --model logreg
+    cmd: docker compose exec -T trainer mlflow run /app -e train -P model=logreg --env-manager local --experiment-name mental_health_classifier
     deps:
       - src/training/train.py
       - src/training/features.py
       - data/processed/train.csv
       - data/processed/test.csv
+      - MLproject
     params:
       - features
       - train.logreg
+    outs:
+      - models/logreg_bundle.joblib:
+          cache: false
     metrics:
       - metrics/logreg_metrics.json:
           cache: false
 
   train_linearsvc:
-    cmd: python src/training/train.py --model linearsvc
+    cmd: docker compose exec -T trainer mlflow run /app -e train -P model=linearsvc --env-manager local --experiment-name mental_health_classifier
     deps:
       - src/training/train.py
       - src/training/features.py
       - data/processed/train.csv
       - data/processed/test.csv
+      - MLproject
     params:
       - features
       - train.linearsvc
+    outs:
+      - models/linearsvc_bundle.joblib:
+          cache: false
     metrics:
       - metrics/linearsvc_metrics.json:
           cache: false
 
   train_xgboost:
-    cmd: python src/training/train.py --model xgboost
+    cmd: docker compose exec -T trainer mlflow run /app -e train -P model=xgboost --env-manager local --experiment-name mental_health_classifier
     deps:
       - src/training/train.py
       - src/training/features.py
       - data/processed/train.csv
       - data/processed/test.csv
+      - MLproject
     params:
       - features
       - train.xgboost
+    outs:
+      - models/xgboost_bundle.joblib:
+          cache: false
     metrics:
       - metrics/xgboost_metrics.json:
           cache: false
+
+  promote:
+    cmd: docker compose exec -T trainer python /app/scripts/promote_model.py
+    deps:
+      - scripts/promote_model.py
+      - metrics/logreg_metrics.json
+      - metrics/linearsvc_metrics.json
+      - metrics/xgboost_metrics.json

@@ -1,0 +1,55 @@
+name: Integration Tests
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  integration:
+    name: API Integration Tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Create .env (dummy SMTP — notifications fall back to log file)
+        run: sed 's/=your_.*/=ci_dummy/' .env.example > .env
+
+      - name: Start API stack (mlflow + 3 fastapi replicas + nginx)
+        run: docker compose up -d mlflow fastapi nginx
+
+      - name: Wait for API to become healthy (up to 150s)
+        run: |
+          for i in $(seq 1 30); do
+            if curl -sf http://localhost:8000/health > /dev/null 2>&1; then
+              echo "API healthy after $((i * 5))s"
+              exit 0
+            fi
+            echo "  waiting... ($i/30)"
+            sleep 5
+          done
+          echo "API did not become healthy in time"
+          docker compose logs fastapi
+          exit 1
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install test dependencies
+        run: pip install pytest==8.3.3 requests==2.32.3
+
+      - name: Run integration tests
+        run: pytest tests/integration/ -v
+        env:
+          API_URL: http://localhost:8000
+
+      - name: Show service logs on failure
+        if: failure()
+        run: docker compose logs fastapi nginx mlflow
+
+      - name: Teardown
+        if: always()
+        run: docker compose down -v

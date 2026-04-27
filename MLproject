@@ -3,7 +3,12 @@ name: mental_health_classifier
 python_env: python_env.yaml
 
 entry_points:
+  train:
+    parameters:
+      model: {type: string, default: "logreg"}
+    command: "python -m src.training.train --model {model}"
+
   main:
     parameters:
-      model_type: {type: string, default: "logreg"}
-    command: "python src/training/train.py --model {model_type}"
+      model: {type: string, default: "logreg"}
+    command: "python -m src.training.train --model {model}"

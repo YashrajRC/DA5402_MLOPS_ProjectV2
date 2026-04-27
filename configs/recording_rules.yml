@@ -10,5 +10,5 @@ groups:
 
       - record: job:error_rate:2m
         expr: |
-          sum(rate(http_requests_total{status=~"5.."}[2m])) /
-          sum(rate(http_requests_total[2m]))
+          (sum(rate(http_requests_total{status=~"5.."}[2m])) or vector(0))
+          / sum(rate(http_requests_total[2m]))

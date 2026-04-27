@@ -41,17 +41,26 @@ class DriftDetector:
         return min(max(js, 0.0), 1.0)
 
     def compute(self) -> float:
-        """Return drift score in [0, 1]. Higher = more drift."""
-        if not self.baseline or len(self.recent_texts) < 20:
-            return 0.0
+        """Return drift score in [0, 1]. Higher = more drift.
+
+        Uses the same normalization as prepare.py: top-1000 words, frequency
+        normalized by the sum of top-1000 counts only (not all words). This
+        ensures the current distribution is comparable to the baseline.
+        """
         with self.lock:
+            n = len(self.recent_texts)
+            if not self.baseline or n < 20:
+                return 0.0
             all_words = []
             for t in self.recent_texts:
                 all_words.extend(t.split())
+
         if not all_words:
             return 0.0
+
         counts = Counter(all_words)
-        total = sum(counts.values())
-        current = {w: c / total for w, c in counts.items()}
+        top_words = dict(counts.most_common(1000))
+        top_total = sum(top_words.values()) or 1
+        current = {w: c / top_total for w, c in top_words.items()}
         baseline_freq = self.baseline.get("word_freq_top1000", {})
         return float(self._js_divergence(current, baseline_freq))

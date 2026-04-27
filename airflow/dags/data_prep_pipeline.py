@@ -3,16 +3,13 @@ Airflow DAG: data_prep_pipeline
 
 Behavior:
 - FileSensor watches /opt/airflow/data/incoming for new CSV files
-- If no file in 12h → "Dry Pipeline" email (sensor soft-fails and triggers alert)
+- If no file in 12h → "Dry Pipeline" notification
 - On new CSV:
-    1. Validate CSV structure + content. If broken → "Broken CSV" email
-    2. Clean text, compute stats
-    3. Detect drift vs baseline stats
-    4. Merge into processed training data
-    5. Archive processed CSV
-    6. Send "Collection Statistics" email summarizing the batch + drift
-- All scraping-like tasks go through Airflow Pool 'data_prep_pool' (size 3)
-- Retries with exponential backoff on transient failures
+    1. Validate structure (handles Kaggle 'statement'/'status' columns too)
+    2. Clean text, compute batch statistics
+    3. Detect drift vs baseline (Jensen-Shannon on top-1000 word frequencies)
+    4. Archive the processed CSV
+    5. Send batch stats report (email if SMTP configured, logs to file otherwise)
 """
 from __future__ import annotations
 
@@ -24,134 +21,170 @@ from pathlib import Path
 
 import pandas as pd
 from airflow import DAG
-from airflow.exceptions import AirflowSensorTimeout
-from airflow.operators.email import EmailOperator
 from airflow.operators.python import PythonOperator
 from airflow.sensors.filesystem import FileSensor
 from airflow.utils.trigger_rule import TriggerRule
 
 ALERT_EMAIL = os.getenv("ALERT_EMAIL", "admin@example.com")
+SMTP_CONFIGURED = bool(os.getenv("MAILTRAP_USER"))  # True only when credentials present
 
-INCOMING_DIR = Path("/opt/airflow/data/incoming")
-ARCHIVE_DIR = Path("/opt/airflow/data/incoming_archive")
-PROCESSED_DIR = Path("/opt/airflow/data/processed")
-BASELINE_PATH = Path("/opt/airflow/data/baseline_stats.json")
+DATA_ROOT     = Path("/opt/airflow/data")
+INCOMING_DIR  = DATA_ROOT / "incoming"
+ARCHIVE_DIR   = DATA_ROOT / "incoming_archive"
+BATCHES_DIR   = DATA_ROOT / "batches"   # separated from DVC-tracked processed/
+BASELINE_PATH = DATA_ROOT / "baseline_stats.json"
+NOTIFY_LOG    = Path("/opt/airflow/logs") / "notifications.log"
 
 REQUIRED_COLS = {"text", "label"}
+COL_ALIASES   = {"statement": "text", "status": "label"}   # Kaggle dataset columns
 
 
-default_args = {
-    "owner": "mlops-student",
-    "depends_on_past": False,
-    "email_on_failure": False,
-    "email_on_retry": False,
-    "retries": 3,
-    "retry_delay": timedelta(seconds=30),
-    "retry_exponential_backoff": True,
-    "max_retry_delay": timedelta(minutes=5),
-}
+# ─────────────────────────── helpers ────────────────────────────────────────
 
+def _normalize_columns(df: pd.DataFrame) -> pd.DataFrame:
+    """Lowercase column names and apply Kaggle→canonical renaming."""
+    df = df.copy()
+    df.columns = df.columns.str.lower()
+    return df.rename(columns=COL_ALIASES)
+
+
+def _notify(subject: str, html: str, **ctx):
+    """Try to send an email; if SMTP isn't configured, write to notification log."""
+    log_entry = (
+        f"\n{'='*60}\n"
+        f"TIMESTAMP : {datetime.utcnow().isoformat()}\n"
+        f"SUBJECT   : {subject}\n"
+        f"BODY      :\n{html}\n"
+    )
+    try:
+        NOTIFY_LOG.parent.mkdir(parents=True, exist_ok=True)
+        with open(NOTIFY_LOG, "a") as f:
+            f.write(log_entry)
+    except Exception:
+        pass  # best-effort logging
+
+    if not SMTP_CONFIGURED:
+        print(f"[notify] SMTP not configured — logged to {NOTIFY_LOG}")
+        print(f"[notify] Subject: {subject}")
+        return
+
+    try:
+        from airflow.utils.email import send_email
+        send_email(to=ALERT_EMAIL, subject=subject, html_content=html)
+        print(f"[notify] Email sent: {subject}")
+    except Exception as e:
+        print(f"[notify] Email failed ({e}) — already logged to file.")
+
+
+# ─────────────────────────── task callables ─────────────────────────────────
 
 def _find_latest_csv(**ctx):
+    INCOMING_DIR.mkdir(parents=True, exist_ok=True)
     files = sorted(INCOMING_DIR.glob("*.csv"), key=lambda p: p.stat().st_mtime)
     if not files:
-        raise FileNotFoundError("No CSV present (sensor should have caught this)")
+        raise FileNotFoundError("No CSV in incoming/ (sensor should have caught this)")
     target = files[-1]
     ctx["ti"].xcom_push(key="csv_path", value=str(target))
+    print(f"Found: {target.name} ({target.stat().st_size / 1024:.1f} KB)")
     return str(target)
 
 
 def _validate_csv(**ctx):
     path = Path(ctx["ti"].xcom_pull(key="csv_path", task_ids="find_latest_csv"))
+
     try:
         df = pd.read_csv(path)
     except Exception as e:
         raise ValueError(f"Cannot parse CSV: {e}")
 
-    missing = REQUIRED_COLS - set(df.columns.str.lower())
+    df = _normalize_columns(df)
+    missing = REQUIRED_COLS - set(df.columns)
     if missing:
-        raise ValueError(f"Missing required columns: {missing}. Got: {list(df.columns)}")
-
-    df.columns = df.columns.str.lower()
-    if df[["text", "label"]].isnull().all(axis=1).any():
-        raise ValueError("Found fully null rows")
+        raise ValueError(
+            f"Missing columns {missing}. Got {list(df.columns)}. "
+            f"Expected 'text'+'label' (or Kaggle aliases 'statement'+'status')."
+        )
 
     if len(df) == 0:
-        raise ValueError("CSV is empty")
+        raise ValueError("CSV is empty after reading")
+
+    df = df[["text", "label"]].dropna(subset=["text", "label"])
+    if len(df) == 0:
+        raise ValueError("No valid rows after dropping nulls in text/label")
 
     ctx["ti"].xcom_push(key="row_count", value=len(df))
     ctx["ti"].xcom_push(key="classes", value=df["label"].value_counts().to_dict())
+    print(f"Validated: {len(df)} rows, {df['label'].nunique()} classes")
     return len(df)
 
 
 def _clean_and_compute_stats(**ctx):
     import re
+
     path = Path(ctx["ti"].xcom_pull(key="csv_path", task_ids="find_latest_csv"))
     df = pd.read_csv(path)
-    df.columns = df.columns.str.lower()
-    df = df[["text", "label"]].dropna()
+    df = _normalize_columns(df)
+    df = df[["text", "label"]].dropna(subset=["text", "label"])
 
-    # Simple cleaning inline (avoids src import path issues in Airflow)
-    def clean(t):
+    def clean(t: str) -> str:
         t = str(t).lower()
-        t = re.sub(r"https?://\S+", " ", t)
-        t = re.sub(r"\s+", " ", t).strip()
-        return t
+        t = re.sub(r"https?://\S+|www\.\S+", " ", t)
+        t = re.sub(r"@\w+", " ", t)
+        return re.sub(r"\s+", " ", t).strip()
 
     df["text"] = df["text"].apply(clean)
+    df = df[df["text"].str.len() >= 3]  # drop very short texts
 
     lengths = df["text"].str.split().str.len()
     stats = {
-        "n_samples": int(len(df)),
-        "avg_text_length": float(lengths.mean()),
+        "n_samples":          int(len(df)),
+        "avg_text_length":    float(lengths.mean()),
         "class_distribution": df["label"].value_counts(normalize=True).to_dict(),
     }
 
-    # Save cleaned intermediate
-    out = PROCESSED_DIR / f"batch_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}.csv"
-    out.parent.mkdir(parents=True, exist_ok=True)
+    BATCHES_DIR.mkdir(parents=True, exist_ok=True)
+    out = BATCHES_DIR / f"batch_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}.csv"
     df.to_csv(out, index=False)
 
-    ctx["ti"].xcom_push(key="batch_path", value=str(out))
+    ctx["ti"].xcom_push(key="batch_path",  value=str(out))
     ctx["ti"].xcom_push(key="batch_stats", value=stats)
+    print(f"Cleaned batch → {out.name}  ({stats['n_samples']} rows)")
     return stats
 
 
 def _detect_drift(**ctx):
-    """Compare batch stats to baseline_stats.json → flag drift."""
+    """Compare batch word frequencies to baseline using Jensen-Shannon divergence."""
     import math
     from collections import Counter
 
     batch_path = ctx["ti"].xcom_pull(key="batch_path", task_ids="clean_and_stats")
     df = pd.read_csv(batch_path)
 
-    # Build word-freq for batch
     words = " ".join(df["text"].astype(str).tolist()).split()
     counts = Counter(words)
-    total = sum(counts.values()) or 1
-    batch_freq = {w: c / total for w, c in counts.most_common(1000)}
+    top_words = dict(counts.most_common(1000))
+    top_total = sum(top_words.values()) or 1
+    batch_freq = {w: c / top_total for w, c in top_words.items()}
 
     if not BASELINE_PATH.exists():
-        drift = 0.0
-        note = "no baseline yet"
+        drift, note = 0.0, "no baseline available yet"
     else:
         with open(BASELINE_PATH) as f:
             baseline = json.load(f)
         baseline_freq = baseline.get("word_freq_top1000", {})
 
-        vocab = set(batch_freq) | set(baseline_freq)
         eps = 1e-12
         js = 0.0
-        for w in vocab:
+        for w in set(batch_freq) | set(baseline_freq):
             p = batch_freq.get(w, 0.0) + eps
             q = baseline_freq.get(w, 0.0) + eps
             m = 0.5 * (p + q)
             js += 0.5 * p * math.log(p / m) + 0.5 * q * math.log(q / m)
-        drift = min(max(js, 0.0), 1.0)
-        note = "drift detected" if drift > 0.3 else "within tolerance"
+        drift = float(min(max(js, 0.0), 1.0))
+        note  = "⚠️ drift detected" if drift > 0.3 else "✅ within tolerance"
 
     ctx["ti"].xcom_push(key="drift_score", value=drift)
-    ctx["ti"].xcom_push(key="drift_note", value=note)
+    ctx["ti"].xcom_push(key="drift_note",  value=note)
     print(f"Drift: {drift:.4f} ({note})")
     return drift
 
@@ -161,38 +194,78 @@ def _archive(**ctx):
     ARCHIVE_DIR.mkdir(parents=True, exist_ok=True)
     target = ARCHIVE_DIR / csv_path.name
     shutil.move(str(csv_path), str(target))
+    print(f"Archived: {csv_path.name} → incoming_archive/")
     return str(target)
 
 
-def _build_stats_email(**ctx):
-    ti = ctx["ti"]
+def _send_stats_notification(**ctx):
+    ti    = ctx["ti"]
     stats = ti.xcom_pull(key="batch_stats", task_ids="clean_and_stats")
     drift = ti.xcom_pull(key="drift_score", task_ids="detect_drift")
-    note = ti.xcom_pull(key="drift_note", task_ids="detect_drift")
+    note  = ti.xcom_pull(key="drift_note",  task_ids="detect_drift")
 
     classes_html = "".join(
-        f"<li>{k}: {v*100:.1f}%</li>" for k, v in stats["class_distribution"].items()
+        f"<li>{k}: {v*100:.1f}%</li>"
+        for k, v in sorted(stats["class_distribution"].items(), key=lambda x: -x[1])
     )
+    drift_color = "#d32f2f" if drift > 0.3 else "#388e3c"
     html = f"""
-    <h3>Batch Ingestion Report</h3>
-    <ul>
-      <li><b>Samples:</b> {stats['n_samples']}</li>
-      <li><b>Avg text length (tokens):</b> {stats['avg_text_length']:.1f}</li>
-      <li><b>Drift score:</b> {drift:.4f} ({note})</li>
-    </ul>
-    <h4>Class distribution</h4>
-    <ul>{classes_html}</ul>
+    <h2 style="font-family:sans-serif;">📦 Batch Ingestion Report</h2>
+    <table style="font-family:sans-serif;border-collapse:collapse;width:400px;">
+      <tr><td><b>Samples ingested</b></td><td>{stats['n_samples']:,}</td></tr>
+      <tr><td><b>Avg text length (words)</b></td><td>{stats['avg_text_length']:.1f}</td></tr>
+      <tr><td><b>Drift score</b></td>
+          <td><span style="color:{drift_color};font-weight:700;">{drift:.4f} — {note}</span></td></tr>
+    </table>
+    <h3 style="font-family:sans-serif;">Class distribution</h3>
+    <ul style="font-family:sans-serif;">{classes_html}</ul>
     """
-    ti.xcom_push(key="stats_html", value=html)
-    return "built"
+    _notify(subject="[MLOps] Batch ingested — stats & drift report", html=html, **ctx)
 
+
+def _send_broken_csv_notification(**ctx):
+    _notify(
+        subject="[MLOps] ALERT: Broken / invalid CSV in incoming/",
+        html=(
+            "<h2>⚠️ CSV Validation Failed</h2>"
+            "<p>A CSV in <code>/opt/airflow/data/incoming</code> failed validation.</p>"
+            "<p>Check Airflow UI → <b>data_prep_pipeline → validate_csv</b> logs for details.</p>"
+        ),
+        **ctx,
+    )
+
+
+def _send_dry_pipeline_notification(**ctx):
+    _notify(
+        subject="[MLOps] ALERT: Dry pipeline — no data in 12 hours",
+        html=(
+            "<h2>🔕 Dry Pipeline Alert</h2>"
+            "<p>No CSV arrived in <code>/opt/airflow/data/incoming</code> within 12 hours.</p>"
+            "<p>Check the data source health.</p>"
+        ),
+        **ctx,
+    )
+
+
+# ─────────────────────────── DAG definition ─────────────────────────────────
+
+default_args = {
+    "owner":                    "mlops-student",
+    "depends_on_past":          False,
+    "email_on_failure":         False,
+    "email_on_retry":           False,
+    "retries":                  2,
+    "retry_delay":              timedelta(seconds=30),
+    "retry_exponential_backoff": True,
+    "max_retry_delay":          timedelta(minutes=3),
+}
 
 with DAG(
     dag_id="data_prep_pipeline",
-    description="Sensor → validate → clean → drift → archive → email",
+    description="CSV sensor → validate → clean → drift → archive → notify",
     default_args=default_args,
     start_date=datetime(2024, 1, 1),
-    schedule="*/10 * * * *",       # check every 10 min
+    schedule="*/10 * * * *",
     catchup=False,
     max_active_runs=1,
     tags=["mlops", "data-prep"],
@@ -200,12 +273,12 @@ with DAG(
 
     wait_for_csv = FileSensor(
         task_id="wait_for_csv",
-        filepath="/opt/airflow/data/incoming/*.csv",
+        filepath=str(INCOMING_DIR / "*.csv"),
         fs_conn_id="fs_default",
         poke_interval=60,
-        timeout=60 * 60 * 12,      # 12h
+        timeout=60 * 60 * 12,   # 12 h
         mode="reschedule",
-        soft_fail=True,            # if timeout, DAG continues to dry-alert branch
+        soft_fail=True,
         pool="data_prep_pool",
     )
 
@@ -239,48 +312,34 @@ with DAG(
         pool="data_prep_pool",
     )
 
-    build_stats_email = PythonOperator(
-        task_id="build_stats_email",
-        python_callable=_build_stats_email,
+    notify_stats = PythonOperator(
+        task_id="notify_stats",
+        python_callable=_send_stats_notification,
     )
 
-    # Success path email: batch stats + drift
-    email_stats = EmailOperator(
-        task_id="email_stats",
-        to=ALERT_EMAIL,
-        subject="[MLOps] Batch ingested — stats & drift",
-        html_content="{{ ti.xcom_pull(key='stats_html', task_ids='build_stats_email') }}",
-    )
-
-    # Failure path: broken CSV email (runs only if validate_csv fails)
-    email_broken = EmailOperator(
-        task_id="email_broken_csv",
-        to=ALERT_EMAIL,
-        subject="[MLOps] ALERT: Broken CSV in incoming/",
-        html_content=(
-            "A CSV in /opt/airflow/data/incoming failed validation. "
-            "Check the Airflow UI → data_prep_pipeline → validate_csv logs."
-        ),
+    notify_broken_csv = PythonOperator(
+        task_id="notify_broken_csv",
+        python_callable=_send_broken_csv_notification,
         trigger_rule=TriggerRule.ONE_FAILED,
     )
 
-    # Dry-pipeline alert: fires if sensor times out (soft_fail → downstream skipped,
-    # but we branch off the sensor itself with ALL_FAILED trigger)
-    email_dry = EmailOperator(
-        task_id="email_dry_pipeline",
-        to=ALERT_EMAIL,
-        subject="[MLOps] ALERT: Dry pipeline — no data in 12h",
-        html_content=(
-            "No CSV has arrived in /opt/airflow/data/incoming within the 12h window. "
-            "Check data-source health."
-        ),
-        trigger_rule=TriggerRule.ALL_FAILED,
+    notify_dry_pipeline = PythonOperator(
+        task_id="notify_dry_pipeline",
+        python_callable=_send_dry_pipeline_notification,
+        trigger_rule=TriggerRule.ALL_SKIPPED,   # fires when sensor soft-fails (→ skipped)
     )
 
-    # Main success chain
-    wait_for_csv >> find_latest_csv >> validate_csv >> clean_and_stats \
-        >> detect_drift >> archive >> build_stats_email >> email_stats
+    # ── Success path ──────────────────────────────────────────────────────────
+    (
+        wait_for_csv
+        >> find_latest_csv
+        >> validate_csv
+        >> clean_and_stats
+        >> detect_drift
+        >> archive
+        >> notify_stats
+    )
 
-    # Failure branches
-    validate_csv >> email_broken
-    wait_for_csv >> email_dry
+    # ── Failure / alert branches ──────────────────────────────────────────────
+    validate_csv     >> notify_broken_csv    # fires if validate_csv fails
+    wait_for_csv     >> notify_dry_pipeline  # fires when sensor is skipped (12 h timeout)

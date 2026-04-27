@@ -1,5 +1,7 @@
 python: "3.11"
-dependencies:
+build_dependencies:
   - pip
-  - pip:
-    - -r requirements.txt
+  - setuptools
+  - wheel
+dependencies:
+  - -r requirements.txt

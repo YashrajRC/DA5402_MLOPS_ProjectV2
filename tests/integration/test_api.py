@@ -21,6 +21,15 @@ def _api_up():
 pytestmark = pytest.mark.skipif(not _api_up(), reason="API not running")
 
 
+@pytest.fixture(scope="session")
+def model_ready():
+    """True only when a model is loaded (ready endpoint returns 200)."""
+    try:
+        return requests.get(f"{API}/ready", timeout=3).status_code == 200
+    except Exception:
+        return False
+
+
 def test_health():
     r = requests.get(f"{API}/health", timeout=5)
     assert r.status_code == 200
@@ -40,7 +49,9 @@ def test_metrics_exposed():
     assert b"http_requests_total" in r.content
 
 
-def test_predict_returns_valid_probs():
+def test_predict_returns_valid_probs(model_ready):
+    if not model_ready:
+        pytest.skip("No model loaded in this environment")
     r = requests.post(f"{API}/predict", json={"text": "I feel anxious"}, timeout=10)
     assert r.status_code == 200
     body = r.json()
@@ -71,8 +82,10 @@ def test_feedback_accepted():
     assert r.json()["status"] == "logged"
 
 
-def test_load_distribution_across_containers():
+def test_load_distribution_across_containers(model_ready):
     """Make 30 requests; at least 2 distinct container IDs should appear."""
+    if not model_ready:
+        pytest.skip("No model loaded in this environment")
     ids = set()
     for _ in range(30):
         r = requests.post(f"{API}/predict", json={"text": "I am sad"}, timeout=10)

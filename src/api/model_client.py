@@ -1,6 +1,6 @@
 """
 Loads the model bundle from MLflow registry, with local fallback.
-The bundle contains TF-IDF, handcrafted features, classifier, and label encoder.
+Bundle structure: tfidf_word, tfidf_char, handcrafted, classifier, label_encoder, labels.
 """
 import os
 from pathlib import Path
@@ -8,8 +8,7 @@ from typing import Optional
 
 import joblib
 import numpy as np
-
-from src.training.features import combine_features
+from scipy.sparse import csr_matrix, hstack
 
 
 class ModelClient:
@@ -19,10 +18,10 @@ class ModelClient:
         self.stage: str = "unknown"
 
     def load(self):
-        """Try MLflow registry first, fall back to local models/ folder."""
+        """Load champion model from MLflow registry (alias-based), fall back to local."""
         mlflow_uri = os.getenv("MLFLOW_TRACKING_URI", "http://mlflow:5000")
         model_name = os.getenv("MODEL_NAME", "mental_health_classifier")
-        stage = os.getenv("MODEL_STAGE", "Production")
+        alias = os.getenv("MODEL_ALIAS", "champion")
 
         try:
             import mlflow
@@ -31,56 +30,50 @@ class ModelClient:
             mlflow.set_tracking_uri(mlflow_uri)
             client = MlflowClient(tracking_uri=mlflow_uri)
 
-            versions = client.get_latest_versions(model_name, stages=[stage])
-            if not versions:
-                raise RuntimeError(f"No versions at stage {stage}")
-            v = versions[0]
+            v = client.get_model_version_by_alias(model_name, alias)
             run_id = v.run_id
 
-            # Download the bundle artifact logged during training
             local_dir = client.download_artifacts(run_id, "model_bundle")
             bundle_files = list(Path(local_dir).glob("*_bundle.joblib"))
             if not bundle_files:
-                raise RuntimeError("No bundle in artifacts")
+                raise RuntimeError("No bundle artifact found in MLflow run")
             self.bundle = joblib.load(bundle_files[0])
             self.version = v.version
-            self.stage = stage
-            print(f"[ModelClient] Loaded from MLflow: v{v.version} ({stage})")
+            self.stage = alias
+            print(f"[ModelClient] Loaded from MLflow: v{v.version} alias='{alias}'")
         except Exception as e:
             print(f"[ModelClient] MLflow load failed: {e}. Trying local fallback...")
             models_dir = Path("/app/models")
             bundles = list(models_dir.glob("*_bundle.joblib"))
             if not bundles:
                 raise RuntimeError(
-                    "No model available. Train first, then promote to Production."
+                    "No model available. Run: dvc repro && docker compose exec -T trainer python /app/scripts/promote_model.py"
                 ) from e
-            # Prefer logreg as default local fallback
-            priority = {"logreg": 0, "linearsvc": 1, "xgboost": 2}
+            priority = {"linearsvc": 0, "xgboost": 1, "logreg": 2}
             bundles.sort(key=lambda p: priority.get(p.stem.split("_")[0], 99))
             self.bundle = joblib.load(bundles[0])
             self.version = "local"
             self.stage = "fallback"
             print(f"[ModelClient] Loaded local fallback: {bundles[0].name}")
 
+    def _vectorize(self, text: str):
+        b = self.bundle
+        w = b["tfidf_word"].transform([text])
+        c = b["tfidf_char"].transform([text])
+        h = b["handcrafted"].transform([text])
+        return hstack([w, c, csr_matrix(h)])
+
     def predict(self, text: str):
         if self.bundle is None:
             raise RuntimeError("Model not loaded")
 
-        tfidf = self.bundle["tfidf"]
-        hf = self.bundle["handcrafted"]
+        X = self._vectorize(text)
         clf = self.bundle["classifier"]
-        le = self.bundle["label_encoder"]
         labels = self.bundle["labels"]
 
-        tfidf_vec = tfidf.transform([text])
-        hf_vec = hf.transform([text])
-        X = combine_features(tfidf_vec, hf_vec)
-
-        # Probabilities
         if hasattr(clf, "predict_proba"):
             probs = clf.predict_proba(X)[0]
         else:
-            # Shouldn't happen since we wrap LinearSVC in CalibratedClassifierCV
             pred = clf.predict(X)[0]
             probs = np.zeros(len(labels))
             probs[pred] = 1.0
