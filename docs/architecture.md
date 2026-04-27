@@ -6,8 +6,9 @@
 graph TB
     User([End User])
 
-    subgraph Ingest["Data Ingestion  —  Airflow :8080"]
-        AF["FileSensor → validate → clean\n→ drift detect → archive → notify"]
+    subgraph Ingest["Data Ingestion & Retraining  —  Airflow :8080"]
+        AF["data_prep_pipeline\nFileSensor → validate → clean\n→ drift detect → archive → notify"]
+        RT["retrain_pipeline\nfeedback threshold → split\n→ retrain → promote → notify"]
     end
 
     subgraph Train["Training Pipeline  —  run once, cached by DVC"]
@@ -35,7 +36,9 @@ graph TB
     DVC -->|"produces"| BASE
     BASE -->|"batch drift baseline"| AF
     BASE -->|"live drift baseline"| FA
-    AF -->|"cleaned batches\ntrigger retraining when needed"| DVC
+    AF -->|"cleaned batches"| DVC
+    FA -->|"feedback.log\n(shared data mount)"| RT
+    RT -->|"appends to train/test CSV\nthen runs train.py"| DVC
     MLB -->|"champion model bundle\nloaded at startup"| FA
     FA -->|"/metrics scrape"| PR
     User --> ST
@@ -72,7 +75,7 @@ flowchart LR
 
     INCOMING -->|"FileSensor"| AF
     BASE -->|"drift baseline"| D
-    C -.->|"cleaned batches\nfor future retraining"| PREP
+    C -.->|"cleaned batches"| PREP
 
     MLB -->|"champion bundle"| FA2
 
@@ -126,6 +129,44 @@ flowchart TD
     style BROKEN fill:#ffeaea,stroke:#dc3545
     style DRY fill:#ffeaea,stroke:#dc3545
     style NOTIFY fill:#e8f5e9,stroke:#28a745
+```
+
+---
+
+## 3b. Airflow DAG — `retrain_pipeline`
+
+```mermaid
+flowchart TD
+    START([DAG start\nevery 2 hours]) --> CHECK
+
+    CHECK[check_feedback_threshold\ncount lines in feedback.log]
+    CHECK -->|"< threshold\n(default 10)"| SKIP([DAG skipped\nno action])
+    CHECK -->|">= threshold"| SPLIT
+
+    SPLIT[split_and_append_feedback\nparse correct_label as ground truth\n80% → train.csv · 20% → test.csv\narchive + delete feedback.log]
+    SPLIT --> GETTYPE
+
+    GETTYPE[get_champion_model_type\nquery MLflow champion alias\nextract model_type param]
+    GETTYPE --> TRAIN
+
+    TRAIN[run_training\nsubprocess: python -m src.training.train\n--model xgboost / logreg / linearsvc\n35-min timeout]
+    TRAIN --> PROMOTE
+
+    PROMOTE[promote_model\ncompare all MLflow versions\npromote only if new version beats champion]
+    PROMOTE --> NOTIFY
+
+    NOTIFY[notify_success\nlog rows added · promotion result]
+
+    FAIL[notify_failure\nlog alert to notifications.log]
+
+    SPLIT & GETTYPE & TRAIN & PROMOTE -->|any task fails| FAIL
+
+    style CHECK fill:#f0f4ff,stroke:#4a6cf7
+    style SKIP fill:#f5f5f5,stroke:#aaa
+    style TRAIN fill:#fff3cd,stroke:#f0ad4e
+    style PROMOTE fill:#e8f5e9,stroke:#28a745
+    style NOTIFY fill:#e8f5e9,stroke:#28a745
+    style FAIL fill:#ffeaea,stroke:#dc3545
 ```
 
 ---

@@ -72,9 +72,11 @@ This system provides automated, real-time classification of free-form text into 
 │  prepare → train_logreg / train_linearsvc / train_xgboost     │
 │         → promote (picks best macro-F1)                        │
 ├────────────────────────────────────────────────────────────────┤
-│  INGESTION LAYER (Airflow)                                     │
-│  FileSensor → validate → clean → drift_detect → archive        │
-│            → notify (email or log)                             │
+│  INGESTION & RETRAINING LAYER (Airflow)                        │
+│  data_prep_pipeline: FileSensor → validate → clean →           │
+│    drift_detect → archive → notify                             │
+│  retrain_pipeline: feedback threshold → split → retrain →      │
+│    promote → notify                                            │
 ├────────────────────────────────────────────────────────────────┤
 │  OBSERVABILITY LAYER                                           │
 │  Prometheus :9090 ──▶ Grafana :3001                            │
@@ -94,7 +96,7 @@ This system provides automated, real-time classification of free-form text into 
 | FastAPI | FastAPI 0.115 / Uvicorn | REST API: predict, feedback, health, metrics, model_info |
 | MLflow | MLflow 2.16 / SQLite | Experiment tracking, artifact store, model registry |
 | DVC | DVC 3.55 | Reproducible ML pipeline with stage-level caching |
-| Airflow | Apache Airflow 2.9.2 | Scheduled data ingestion, validation, drift detection |
+| Airflow | Apache Airflow 2.9.2 | Two DAGs: batch ingestion + drift detection (`data_prep_pipeline`); feedback-triggered retraining + promotion (`retrain_pipeline`) |
 | Prometheus | prom/prometheus | Pull-based metrics collection (15s interval) |
 | Grafana | grafana 11.4.0 | Dashboards, alert visualization |
 | AlertManager | prom/alertmanager | Route Prometheus alerts to email/Slack |
@@ -134,6 +136,16 @@ Each model (`train_logreg`, `train_linearsvc`, `train_xgboost`) is its own DVC s
 The FileSensor runs with `mode="reschedule"` and `soft_fail=True`. It checks every 60 seconds, releases its worker slot between checks, and soft-fails after 12 hours (triggering `notify_dry_pipeline` instead of a hard failure).
 
 **Why:** Poke mode holds a worker slot indefinitely. With pool size 3 and a 12-hour timeout, poke mode would starve the pool. Reschedule mode allows the pool to serve other tasks between sensor checks.
+
+### 6.8 Feedback-Driven Retraining Loop
+
+The `/feedback` endpoint writes user corrections as JSON lines to `data/feedback.log` (shared bind-mount between FastAPI and Airflow). The `retrain_pipeline` DAG polls this file every 2 hours. When `FEEDBACK_THRESHOLD` entries accumulate it:
+
+1. Splits feedback 80/20 (stratified by `correct_label`) and appends each slice to the existing `train.csv`/`test.csv` — so every retraining run trains on all historical data plus feedback.
+2. Retrains the current champion model type (queried from MLflow) as a new registered version.
+3. Promotes the new version only if its `macro_f1` beats the incumbent — ensuring feedback noise cannot degrade the serving model.
+
+The test set grows alongside the train set, so evaluation metrics remain representative of the current data distribution rather than freezing at initial-training time.
 
 ### 6.7 Notification Fallback
 All email alerts use a `_notify()` helper (PythonOperator) instead of Airflow's built-in `EmailOperator`. `_notify()` tries SMTP first; if SMTP is not configured or fails, it writes to `/opt/airflow/logs/notifications.log` without raising.

@@ -16,7 +16,7 @@ Streamlit UI → Nginx → 3× FastAPI → MLflow models · Airflow data pipelin
 | MLflow | http://localhost:5000 | — |
 | Airflow | http://localhost:8080 | admin / admin |
 | Prometheus | http://localhost:9090 | — |
-| Grafana | http://localhost:3000 | admin / admin |
+| Grafana | http://localhost:3001 | admin / admin |
 | AlertManager | http://localhost:9093 | — |
 
 ---
@@ -81,7 +81,7 @@ docker compose up -d mlflow prometheus node-exporter alertmanager grafana
 # Wait ~20 seconds. Verify:
 #   http://localhost:5000 loads
 #   http://localhost:9090 loads (Status → Targets should show mlflow eventually; don't worry if fastapi is DOWN — we haven't started it)
-#   http://localhost:3000 loads
+#   http://localhost:3001 loads
 ```
 
 ### 6. Run the DVC pipeline (trains all 3 models)
@@ -134,7 +134,9 @@ docker compose up -d airflow-init
 docker compose up -d airflow-webserver airflow-scheduler
 ```
 
-Open http://localhost:8080 (admin / admin). The `data_prep_pipeline` DAG should be listed and unpaused.
+Open http://localhost:8080 (admin / admin). Two DAGs should be listed and unpaused:
+- `data_prep_pipeline` — FileSensor for incoming CSV batches, drift detection, notifications
+- `retrain_pipeline` — polls feedback log every 2 hours; retrains when ≥ 10 user corrections accumulate
 
 ### 11. Trigger the Airflow pipeline
 
@@ -181,6 +183,10 @@ Airflow DAG picks it up → `validate_csv` fails → `email_broken_csv` fires.
 
 Let the sensor time out (takes 12h by default — can be lowered in the DAG for testing).
 
+### Feedback-triggered retraining
+
+Use the Streamlit UI to submit ≥ 10 feedback corrections, then trigger `retrain_pipeline` manually in Airflow (or wait up to 2 hours for the scheduled run). The DAG appends feedback rows (80/20 split) to `data/processed/train.csv` and `test.csv`, retrains the champion model type, and promotes if the new version scores higher.
+
 ### Running tests
 
 ```bash
@@ -206,7 +212,9 @@ docker compose down -v     # stop + delete volumes (fresh start)
 
 ```
 .
-├── airflow/dags/data_prep_pipeline.py     # DAG with Sensor, Pool, email alerts
+├── airflow/dags/
+│   ├── data_prep_pipeline.py              # FileSensor → validate → clean → drift → archive → notify
+│   └── retrain_pipeline.py                # feedback threshold → split → retrain → promote → notify
 ├── configs/
 │   ├── prometheus.yml
 │   ├── alert_rules.yml
@@ -269,3 +277,10 @@ docker compose down -v     # stop + delete volumes (fresh start)
 
 **Port already in use**
 → Something else is on 8000/8080/5000/etc. Stop it or change the port mapping in `docker-compose.yml`.
+
+**`retrain_pipeline` task fails with PermissionError**
+→ The Airflow user (UID 50000) can't write to files created by root-owned containers. Fix once after initial training:
+```bash
+docker exec trainer bash -c "chmod 666 /app/metrics/* /app/models/*.joblib /app/data/processed/*.csv 2>/dev/null; true"
+docker exec project-fastapi-1 chmod 666 /app/data/feedback.log 2>/dev/null; true
+```

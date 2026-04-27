@@ -94,7 +94,7 @@ Records user correction for a previous prediction.
 { "status": "logged" }
 ```
 
-Feedback appended as JSON lines to `/app/logs/feedback.log`. Prometheus `feedback_total` counter incremented. `rolling_accuracy` Summary updated.
+Feedback appended as JSON lines to `/app/data/feedback.log` (shared bind-mount, readable by Airflow at `/opt/airflow/data/feedback.log`). Prometheus `feedback_total` counter incremented. `rolling_accuracy` Summary updated. The `retrain_pipeline` Airflow DAG consumes this file when it reaches the configured threshold.
 
 ---
 
@@ -392,6 +392,50 @@ dvc diff                           # see what changed vs last commit
 
 ---
 
+### DAG 2: `retrain_pipeline`
+
+**DAG ID:** `retrain_pipeline`  
+**Schedule:** `0 */2 * * *` (every 2 hours)  
+**Max active runs:** 1  
+**Catchup:** False
+
+Polls `feedback.log` for user corrections. Skips the entire run if the threshold is not met; otherwise merges feedback into the processed dataset and retrains.
+
+| Task | Operator | Trigger rule | Description |
+|---|---|---|---|
+| `check_feedback_threshold` | PythonOperator | ALL_SUCCESS | Count lines in feedback.log; raise `AirflowSkipException` if < `FEEDBACK_THRESHOLD` |
+| `split_and_append_feedback` | PythonOperator | ALL_SUCCESS | Parse JSON lines (use `correct_label` as ground truth); stratified 80/20 split → append to train.csv / test.csv; archive and delete feedback.log |
+| `get_champion_model_type` | PythonOperator | ALL_SUCCESS | Query MLflow for champion alias → extract model_type param; default `logreg` |
+| `run_training` | PythonOperator | ALL_SUCCESS | `subprocess.run` → `python -m src.training.train --model {type}`; 35-minute timeout |
+| `promote_model` | PythonOperator | ALL_SUCCESS | Compare all registered versions by `macro_f1`; promote winner to `champion` alias only if it beats the current champion |
+| `notify_success` | PythonOperator | ALL_SUCCESS | Log retraining summary (rows added, promotion result) to notifications.log |
+| `notify_failure` | PythonOperator | ONE_FAILED | Log alert to notifications.log when any core task fails |
+
+**XCom keys used:**
+
+| Key | Set by | Read by |
+|---|---|---|
+| `n_train` | `split_and_append_feedback` | `notify_success` |
+| `n_test` | `split_and_append_feedback` | `notify_success` |
+| `model_type` | `get_champion_model_type` | `run_training` |
+| `promoted_version` | `promote_model` | `notify_success` |
+| `promoted_type` | `promote_model` | `notify_success` |
+| `promoted_f1` | `promote_model` | `notify_success` |
+
+**Feedback log format** (`/app/data/feedback.log`, JSON lines):
+```json
+{
+  "ts": 1777313261.256,
+  "datetime": "2026-04-27 18:07:41",
+  "text": "original input text",
+  "predicted_label": "Depression",
+  "correct_label": "Anxiety",
+  "was_correct": false
+}
+```
+
+---
+
 ## 6. Prometheus Metrics Schema
 
 ### Recording Rules (`recording_rules.yml`)
@@ -448,10 +492,13 @@ Each request carries the originating `container_id` in the response body, allowi
 | fastapi | `./src` | `/app/src` | API source code |
 | fastapi | `./data` | `/app/data` | baseline_stats.json for drift |
 | fastapi | `./models` | `/app/models` | Local fallback bundles |
-| fastapi | `feedback-logs` (named) | `/app/logs` | feedback.log |
+| fastapi | `./data` | `/app/data` | baseline_stats.json, feedback.log |
 | airflow-* | `./airflow/dags` | `/opt/airflow/dags` | DAG files |
 | airflow-* | `./airflow/logs` | `/opt/airflow/logs` | Task logs |
-| airflow-* | `./data` | `/opt/airflow/data` | incoming/, batches/, baseline |
+| airflow-* | `./data` | `/opt/airflow/data` | incoming/, batches/, baseline, feedback.log |
+| airflow-* | `./params.yaml` | `/opt/airflow/params.yaml` | Hyperparameters for retraining |
+| airflow-* | `./models` | `/opt/airflow/models` | Joblib bundles written by retraining |
+| airflow-* | `./metrics` | `/opt/airflow/metrics` | Metric JSON/PNG files written by retraining |
 | mlflow | `./mlruns` | `/mlruns` | Experiment runs and artifacts |
 
 ---
@@ -470,6 +517,9 @@ Each request carries the originating `container_id` in the response body, allowi
 | `ALERT_EMAIL` | airflow | (from .env) | Recipient address |
 | `PYTHONPATH` | trainer, fastapi | `/app` | Python module root |
 | `NLTK_DATA` | airflow, fastapi | `/home/airflow/nltk_data` | NLTK data directory |
+| `FEEDBACK_LOG_PATH` | fastapi | `/app/data/feedback.log` | Override feedback log location |
+| `FEEDBACK_THRESHOLD` | airflow | `10` | Min entries before retraining triggers |
+| `MLFLOW_TRACKING_URI` | airflow | `http://mlflow:5000` | MLflow server (used by retrain DAG) |
 
 ---
 
