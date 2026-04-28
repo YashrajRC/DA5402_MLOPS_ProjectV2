@@ -76,7 +76,7 @@ Feature fitting is performed on the inner-train split only (35,819 samples). Vec
 
 **Rationale:** LinearSVC finds maximum-margin decision boundaries. CalibratedClassifierCV wraps it to produce valid probabilities (required for the `/predict` endpoint which returns per-class scores).
 
-### 4.3 XGBoost (MLflow v8 — Champion)
+### 4.3 XGBoost (MLflow v12 — Champion)
 
 | Parameter | Value |
 |---|---|
@@ -102,10 +102,10 @@ Feature fitting is performed on the inner-train split only (35,819 samples). Vec
 | Model | Val Accuracy | Val Macro-F1 | Test Accuracy | Test Macro-F1 | Test Weighted-F1 |
 |---|---|---|---|---|---|
 | Logistic Regression (v7) | 0.7928 | 0.7672 | 0.7978 | 0.7729 | 0.7969 |
-| **XGBoost (v8) ← Champion** | **0.8070** | **0.7767** | **0.8042** | **0.7803** | **0.8025** |
+| **XGBoost (v12) ← Champion** | **0.8070** | **0.7767** | **0.8042** | **0.7803** | **0.8025** |
 | LinearSVC (v9) | 0.6921 | 0.5237 | 0.6868 | 0.5176 | 0.6643 |
 
-### 5.2 Per-Class F1 — Champion Model (XGBoost v8)
+### 5.2 Per-Class F1 — Champion Model (XGBoost v12)
 
 | Class | Test F1 | Training samples | Notes |
 |---|---|---|---|
@@ -137,11 +137,15 @@ Feature fitting is performed on the inner-train split only (35,819 samples). Vec
 
 The `promote` DVC stage runs `scripts/promote_model.py` which:
 1. Queries all registered MLflow versions
-2. Retrieves each run's `macro_f1` metric
-3. Sets the `champion` alias on the highest-scoring version
+2. Skips any version whose run lacks `val_macro_f1` (pre-validation-split runs)
+3. Promotes the highest test `macro_f1` eligible version to the `champion` alias
 4. Archives the previous champion as `challenger`
 
-XGBoost v8 was manually force-promoted as champion because it was trained with the proper validation split (v4, the previous champion, was trained without a validation split and lacks validation metrics for display).
+**Current champion: v12 (XGBoost, macro_f1 = 0.7803)**
+
+Versions v1–v6 are excluded from promotion because they were trained without a held-out validation split (`val_macro_f1` absent). Among eligible versions (v7–v12), XGBoost v12 achieves the highest macro-F1 and holds the `champion` alias; XGBoost v8 (identical metrics, earlier registration of the same model) holds `challenger`.
+
+A retrain triggered by a test feedback log produced three runs in the same experiment (two FAILED, one FINISHED as v13). Those runs and v13 were removed from the registry and soft-deleted from the experiment history, as they were trained on artificial data and scored lower (macro_f1 = 0.7767) than the genuine champion.
 
 ---
 

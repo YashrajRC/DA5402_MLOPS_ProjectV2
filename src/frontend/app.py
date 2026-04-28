@@ -45,6 +45,19 @@ st.set_page_config(
 # ── Minimal CSS (safe: always explicit bg+fg pairs) ───────────────────────────
 st.markdown("""
 <style>
+/* Global font size bump */
+html, body, [class*="css"], .stMarkdown, .stText, p, li, label, div {
+    font-size: 1.12rem;
+}
+
+/* Tab labels — target the <p> inside each tab button */
+button[data-baseweb="tab"] p,
+div[data-testid="stTabs"] button[role="tab"] p,
+[role="tab"] p {
+    font-size: 1.15rem !important;
+    font-weight: 600 !important;
+}
+
 /* Compact top padding */
 .main .block-container { padding-top: 1.2rem; padding-bottom: 2rem; }
 
@@ -203,7 +216,6 @@ with tab_analyze:
             analyze = st.button(
                 "Analyze →",
                 type="primary",
-                disabled=(char_count < 3),
                 use_container_width=True,
             )
         with char_col:
@@ -213,21 +225,24 @@ with tab_analyze:
                 st.caption(f"{char_count:,} / 10,000 characters")
 
         if analyze:
-            st.session_state.feedback_given = False
-            with st.spinner("Analyzing text..."):
-                try:
-                    resp = requests.post(
-                        f"{API_URL}/predict", json={"text": text}, timeout=15
-                    )
-                    resp.raise_for_status()
-                    st.session_state.result    = resp.json()
-                    st.session_state.last_text = text
-                except requests.exceptions.ConnectionError:
-                    st.error("Cannot reach the API. Check that Docker Compose is running.")
-                except requests.exceptions.HTTPError as e:
-                    st.error(f"API error {e.response.status_code}: {e.response.text}")
-                except Exception as e:
-                    st.error(f"Unexpected error: {e}")
+            if char_count < 3:
+                st.warning("Please enter at least 3 characters before analyzing.")
+            else:
+                st.session_state.feedback_given = False
+                with st.spinner("Analyzing text..."):
+                    try:
+                        resp = requests.post(
+                            f"{API_URL}/predict", json={"text": text}, timeout=15
+                        )
+                        resp.raise_for_status()
+                        st.session_state.result    = resp.json()
+                        st.session_state.last_text = text
+                    except requests.exceptions.ConnectionError:
+                        st.error("Cannot reach the API. Check that Docker Compose is running.")
+                    except requests.exceptions.HTTPError as e:
+                        st.error(f"API error {e.response.status_code}: {e.response.text}")
+                    except Exception as e:
+                        st.error(f"Unexpected error: {e}")
 
     with result_col:
         if st.session_state.result:
@@ -278,22 +293,28 @@ with tab_analyze:
                 marker_color=bar_colors,
                 text=[f"{v*100:.1f}%" for v in values_sorted],
                 textposition="outside",
+                textfont=dict(color="#1e2d3d", size=12),
                 cliponaxis=False,
                 hovertemplate="%{y}: %{x:.1%}<extra></extra>",
             ))
             fig.update_layout(
-                height=300,
-                margin=dict(l=0, r=70, t=10, b=10),
+                height=320,
+                margin=dict(l=150, r=90, t=10, b=30),
                 xaxis=dict(
-                    tickformat=".0%", range=[0, 1.15],
-                    showgrid=True, gridcolor="#eee", zeroline=False,
+                    tickformat=".0%", range=[0, 1.2],
+                    showgrid=True, gridcolor="#ddd", zeroline=False,
+                    tickfont=dict(color="#1e2d3d", size=12),
                 ),
-                yaxis=dict(showgrid=False),
+                yaxis=dict(
+                    showgrid=False,
+                    tickfont=dict(color="#1e2d3d", size=13),
+                    automargin=True,
+                ),
                 plot_bgcolor="white",
                 paper_bgcolor="white",
                 font=dict(size=13, color="#1e2d3d"),
             )
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, use_container_width=True, theme=None)
 
         with fb_col:
             st.markdown("#### 💬 Was this correct?")
@@ -400,7 +421,7 @@ with tab_dashboard:
                     paper_bgcolor="white",
                     font=dict(size=12, color="#1e2d3d"),
                 )
-                st.plotly_chart(fig2, use_container_width=True)
+                st.plotly_chart(fig2, use_container_width=True, theme=None)
             else:
                 st.info("Class distribution unavailable — model may not be loaded.")
         except Exception:

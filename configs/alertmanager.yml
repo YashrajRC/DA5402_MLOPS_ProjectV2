@@ -2,8 +2,8 @@ global:
   resolve_timeout: 5m
   smtp_from: "alertmanager@project.local"
   smtp_smarthost: "sandbox.smtp.mailtrap.io:2525"
-  smtp_auth_username: "REPLACE_WITH_MAILTRAP_USER"
-  smtp_auth_password: "REPLACE_WITH_MAILTRAP_PASS"
+  smtp_auth_username: "${MAILTRAP_USER}"
+  smtp_auth_password: "${MAILTRAP_PASS}"
   smtp_require_tls: true
 
 route:
@@ -16,7 +16,7 @@ route:
 receivers:
   - name: email-alerts
     email_configs:
-      - to: "REPLACE_WITH_YOUR_EMAIL"
+      - to: "${ALERT_EMAIL}"
         send_resolved: true
 
 inhibit_rules:

@@ -140,8 +140,13 @@ services:
       - "9093:9093"
     volumes:
       - ./configs/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
-    command:
-      - --config.file=/etc/alertmanager/alertmanager.yml
+      - ./configs/alertmanager-entrypoint.sh:/entrypoint.sh:ro
+    environment:
+      - MAILTRAP_USER=${MAILTRAP_USER}
+      - MAILTRAP_PASS=${MAILTRAP_PASS}
+      - ALERT_EMAIL=${ALERT_EMAIL}
+    entrypoint: ["/bin/sh", "/entrypoint.sh"]
+    command: []
     restart: unless-stopped
     networks: [appnet]
 
