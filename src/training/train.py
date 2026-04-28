@@ -1,10 +1,3 @@
-"""
-Training entry point for all 3 models.
-Called via: mlflow run . -e train -P model=<logreg|linearsvc|xgboost>
-
-Logs parameters, metrics, and model artifacts to MLflow.
-Writes a metrics JSON for DVC.
-"""
 import argparse
 import json
 import os
@@ -150,7 +143,6 @@ def main():
     labels  = list(le.classes_)
 
     print("Building features (fit on inner train)...")
-    # Word-level TF-IDF
     tfidf_word = TfidfVectorizer(
         max_features=feat_params["max_tfidf_features"],
         ngram_range=tuple(feat_params["ngram_range"]),
@@ -159,7 +151,6 @@ def main():
         sublinear_tf=True,
         stop_words="english",
     )
-    # Char-level TF-IDF (catches misspellings, affixes)
     tfidf_char = TfidfVectorizer(
         max_features=feat_params["max_tfidf_char_features"],
         ngram_range=tuple(feat_params["char_ngram_range"]),
@@ -198,11 +189,9 @@ def main():
         mlflow.log_param("n_val", X_val.shape[0])
         mlflow.log_param("n_test", X_test.shape[0])
 
-        # ── Train on inner split ──────────────────────────────────────────
         print(f"Training {args.model} on inner split ({X_inner.shape[0]} samples)...")
         clf.fit(X_inner, y_inner)
 
-        # ── Validation metrics ────────────────────────────────────────────
         y_val_pred = clf.predict(X_val)
         val_acc      = accuracy_score(y_val, y_val_pred)
         val_f1_macro = f1_score(y_val, y_val_pred, average="macro")
@@ -214,7 +203,6 @@ def main():
             "val_weighted_f1": val_f1_w,
         })
 
-        # ── Test metrics (held-out) ────────────────────────────────────────
         y_pred        = clf.predict(X_test)
         acc           = accuracy_score(y_test, y_pred)
         f1_macro      = f1_score(y_test, y_pred, average="macro")
@@ -232,15 +220,11 @@ def main():
         for label in labels:
             mlflow.log_metric(f"f1_{label.replace(' ', '_')}", report[label]["f1-score"])
 
-        # Confusion matrix on test set
         cm = confusion_matrix(y_test, y_pred)
         cm_path = METRICS_DIR / f"{args.model}_confusion.png"
         plot_confusion(cm, labels, cm_path)
         mlflow.log_artifact(str(cm_path))
 
-        # ── Save bundle: transformers are already fit on inner split ───────
-        # This is intentional — inner-split features are slightly conservative;
-        # for production re-training on full data, re-run with updated data.
         bundle = {
             "tfidf_word": tfidf_word,
             "tfidf_char": tfidf_char,
@@ -254,7 +238,6 @@ def main():
         joblib.dump(bundle, bundle_path)
         mlflow.log_artifact(str(bundle_path), artifact_path="model_bundle")
 
-        # Register model in MLflow registry
         if args.model == "xgboost":
             mlflow.xgboost.log_model(
                 clf, artifact_path="model",

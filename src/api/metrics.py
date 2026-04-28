@@ -1,7 +1,5 @@
-"""All Prometheus metrics for the FastAPI service."""
 from prometheus_client import Counter, Gauge, Histogram, Summary
 
-# Counters
 REQUESTS_TOTAL = Counter(
     "http_requests_total",
     "Total HTTP requests",
@@ -26,7 +24,6 @@ FEEDBACK_TOTAL = Counter(
     ["was_correct"],
 )
 
-# Gauges
 ACTIVE_REQUESTS = Gauge(
     "active_requests",
     "Number of in-flight requests",
@@ -43,7 +40,6 @@ MODEL_VERSION = Gauge(
     ["version", "stage"],
 )
 
-# Histograms
 INFERENCE_LATENCY = Histogram(
     "inference_latency_seconds",
     "Inference time per request",
@@ -56,7 +52,6 @@ TEXT_LENGTH = Histogram(
     buckets=(10, 50, 100, 250, 500, 1000, 2500, 5000),
 )
 
-# Summary (rolling feedback-based accuracy)
 ROLLING_ACCURACY = Summary(
     "rolling_accuracy",
     "Rolling accuracy computed from user feedback",

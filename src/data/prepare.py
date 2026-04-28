@@ -1,4 +1,3 @@
-"""DVC stage: prepare - reads raw, cleans, splits, writes baseline stats."""
 import json
 import os
 from pathlib import Path
@@ -22,14 +21,6 @@ def load_params():
 
 
 def compute_baseline_stats(df: pd.DataFrame, sample_size: int = 500) -> dict:
-    """Reference statistics used later for drift detection.
-
-    Word frequencies are computed from a stratified sample (default 500 rows)
-    so the baseline distribution is calibrated to the same scale as the
-    DriftDetector's rolling window (200 texts) and Airflow batch CSVs.
-    Computing from all 40k+ texts would make the baseline too "smooth" and
-    cause in-distribution text to always look drifted.
-    """
     texts = df["text"].astype(str)
     lengths = texts.str.split().str.len()
 
@@ -65,8 +56,6 @@ def main():
     print(f"Reading {RAW}")
     df = pd.read_csv(RAW)
 
-    # Expect columns: 'statement' and 'status' (Kaggle sentiment-analysis-for-mental-health)
-    # Adapt to whatever column names exist
     if "statement" in df.columns and "status" in df.columns:
         df = df.rename(columns={"statement": "text", "status": "label"})
     elif "text" not in df.columns or "label" not in df.columns:

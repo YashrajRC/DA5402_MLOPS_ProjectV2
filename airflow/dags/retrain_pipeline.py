@@ -1,22 +1,3 @@
-"""
-Airflow DAG: retrain_pipeline
-
-Polls feedback.log every 2 hours. When FEEDBACK_THRESHOLD entries have
-accumulated it:
-  1. Splits feedback 80/20 (stratified) → appends to processed train/test CSVs
-  2. Archives and clears feedback.log so entries aren't reused next cycle
-  3. Retrains the current champion model type via train.py
-  4. Runs promotion — new version wins only if its macro_f1 beats the incumbent
-  5. Notifies via file log (and email if SMTP is configured)
-
-Path notes:
-  - Feedback log : /opt/airflow/data/feedback.log  (same bind-mount as FastAPI's /app/data)
-  - Train CSV    : /opt/airflow/data/processed/train.csv
-  - Test CSV     : /opt/airflow/data/processed/test.csv
-  - params.yaml  : /opt/airflow/params.yaml
-  - models/      : /opt/airflow/models
-  - metrics/     : /opt/airflow/metrics
-"""
 from __future__ import annotations
 
 import json
@@ -43,8 +24,6 @@ FEEDBACK_THRESHOLD = int(os.getenv("FEEDBACK_THRESHOLD", "10"))
 ALERT_EMAIL       = os.getenv("ALERT_EMAIL", "admin@example.com")
 SMTP_CONFIGURED   = bool(os.getenv("MAILTRAP_USER"))
 
-
-# ─────────────────────────── helpers ────────────────────────────────────────
 
 def _notify(subject: str, html: str, **ctx):
     """Write notification to log file; send email when SMTP is configured."""
@@ -74,8 +53,6 @@ def _notify(subject: str, html: str, **ctx):
         print(f"[notify] Email failed ({e}) — already logged to file.")
 
 
-# ─────────────────────────── task callables ─────────────────────────────────
-
 def _check_feedback_threshold(**ctx):
     """Raise AirflowSkipException if feedback hasn't reached the threshold."""
     if not FEEDBACK_LOG.exists():
@@ -92,11 +69,6 @@ def _check_feedback_threshold(**ctx):
 
 
 def _split_and_append_feedback(**ctx):
-    """
-    Parse feedback.log, split 80/20 (stratified where possible),
-    append each slice to the matching processed CSV, then archive the log.
-    Uses correct_label (human-verified ground truth) as the label.
-    """
     from sklearn.model_selection import train_test_split
 
     lines = [l for l in FEEDBACK_LOG.read_text().splitlines() if l.strip()]
@@ -195,11 +167,6 @@ def _run_training(**ctx):
 
 
 def _promote_model(**ctx):
-    """
-    Compare all registered model versions by macro_f1; promote the best
-    to the champion alias. Mirrors promote_model.py logic so it stays
-    consistent with manual promotion runs.
-    """
     from mlflow import MlflowClient
 
     client   = MlflowClient(tracking_uri=MLFLOW_URI)
@@ -287,8 +254,6 @@ def _notify_failure(**ctx):
     )
 
 
-# ─────────────────────────── DAG definition ─────────────────────────────────
-
 default_args = {
     "owner":            "mlops-student",
     "depends_on_past":  False,
@@ -346,7 +311,6 @@ with DAG(
         trigger_rule=TriggerRule.ONE_FAILED,
     )
 
-    # ── Happy path ────────────────────────────────────────────────────────────
     (
         check_threshold
         >> split_and_append
@@ -356,5 +320,4 @@ with DAG(
         >> notify_success
     )
 
-    # ── Failure alert (fires if any core task fails, not just skips) ──────────
     [split_and_append, get_model_type, run_training, promote] >> notify_failure

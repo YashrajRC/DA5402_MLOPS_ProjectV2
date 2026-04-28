@@ -1,7 +1,3 @@
-"""
-Drift detection: compares rolling window of recent inputs to baseline stats.
-Uses Jensen-Shannon distance on word-frequency distributions.
-"""
 import json
 import logging
 import math
@@ -47,12 +43,6 @@ class DriftDetector:
         return min(max(js, 0.0), 1.0)
 
     def compute(self) -> float:
-        """Return drift score in [0, 1]. Higher = more drift.
-
-        Uses the same normalization as prepare.py: top-1000 words, frequency
-        normalized by the sum of top-1000 counts only (not all words). This
-        ensures the current distribution is comparable to the baseline.
-        """
         with self.lock:
             n = len(self.recent_texts)
             if not self.baseline or n < 20:

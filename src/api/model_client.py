@@ -1,7 +1,3 @@
-"""
-Loads the model bundle from MLflow registry, with local fallback.
-Bundle structure: tfidf_word, tfidf_char, handcrafted, classifier, label_encoder, labels.
-"""
 import os
 from pathlib import Path
 from typing import Optional
@@ -18,7 +14,6 @@ class ModelClient:
         self.stage: str = "unknown"
 
     def load(self):
-        """Load champion model from MLflow registry (alias-based), fall back to local."""
         mlflow_uri = os.getenv("MLFLOW_TRACKING_URI", "http://mlflow:5000")
         model_name = os.getenv("MODEL_NAME", "mental_health_classifier")
         alias = os.getenv("MODEL_ALIAS", "champion")

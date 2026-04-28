@@ -1,18 +1,15 @@
-"""Mental Health Text Classifier — Streamlit Frontend (light-theme, tab-based)."""
 import os
 
 import plotly.graph_objects as go
 import requests
 import streamlit as st
 
-# ── External service URLs ─────────────────────────────────────────────────────
 API_URL        = os.getenv("API_URL",        "http://localhost:8000")
 MLFLOW_URL     = os.getenv("MLFLOW_URL",     "http://localhost:5000")
 GRAFANA_URL    = os.getenv("GRAFANA_URL",    "http://localhost:3001")
 PROMETHEUS_URL = os.getenv("PROMETHEUS_URL", "http://localhost:9090")
 AIRFLOW_URL    = os.getenv("AIRFLOW_URL",    "http://localhost:8080")
 
-# ── Per-category styling ──────────────────────────────────────────────────────
 CAT = {
     "Normal":               {"bg": "#e8f5e9", "fg": "#1b5e20", "bar": "#2e7d32", "icon": "😊"},
     "Depression":           {"bg": "#e8eaf6", "fg": "#1a237e", "bar": "#283593", "icon": "😔"},
@@ -34,7 +31,6 @@ def cat_style(label: str) -> dict:
     return DEFAULT_CAT
 
 
-# ── Page config ───────────────────────────────────────────────────────────────
 st.set_page_config(
     page_title="MH Text Classifier",
     page_icon="🧠",
@@ -42,7 +38,6 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-# ── Minimal CSS (safe: always explicit bg+fg pairs) ───────────────────────────
 st.markdown("""
 <style>
 /* Global font size bump */
@@ -131,13 +126,11 @@ div[data-testid="stTabs"] button[role="tab"] p,
 """, unsafe_allow_html=True)
 
 
-# ── Session state ─────────────────────────────────────────────────────────────
 for k, v in [("result", None), ("last_text", ""), ("feedback_given", False)]:
     if k not in st.session_state:
         st.session_state[k] = v
 
 
-# ── Sidebar ───────────────────────────────────────────────────────────────────
 with st.sidebar:
     st.markdown("## 🧠 MH Classifier")
     st.caption("Mental Health Text Analysis System")
@@ -177,7 +170,6 @@ with st.sidebar:
     )
 
 
-# ── Tabs ──────────────────────────────────────────────────────────────────────
 tab_analyze, tab_dashboard, tab_about = st.tabs([
     "🔍 Analyze Text",
     "📊 Model & System Dashboard",
@@ -185,9 +177,6 @@ tab_analyze, tab_dashboard, tab_about = st.tabs([
 ])
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# TAB 1 — ANALYZE
-# ═══════════════════════════════════════════════════════════════════════════════
 with tab_analyze:
     st.markdown("### Paste any text to get a mental-health classification")
     st.warning(
@@ -273,7 +262,6 @@ with tab_analyze:
         else:
             st.info("📝 Your classification result will appear here after you click Analyze.", icon=None)
 
-    # ── Results: chart + feedback ─────────────────────────────────────────────
     if st.session_state.result:
         st.divider()
         chart_col, fb_col = st.columns([5, 2], gap="large")
@@ -365,12 +353,8 @@ with tab_analyze:
                 )
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# TAB 2 — DASHBOARD
-# ═══════════════════════════════════════════════════════════════════════════════
 with tab_dashboard:
 
-    # ── Model info ────────────────────────────────────────────────────────────
     st.markdown("### 🤖 Active Model")
     try:
         info = requests.get(f"{API_URL}/model_info", timeout=5).json()
@@ -394,7 +378,6 @@ with tab_dashboard:
 
     st.divider()
 
-    # ── Charts ────────────────────────────────────────────────────────────────
     left_col, right_col = st.columns(2, gap="large")
 
     with left_col:
@@ -463,9 +446,6 @@ with tab_dashboard:
                 )
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# TAB 3 — ABOUT
-# ═══════════════════════════════════════════════════════════════════════════════
 with tab_about:
     about_left, about_right = st.columns([3, 2], gap="large")
 

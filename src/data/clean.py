@@ -1,4 +1,3 @@
-"""Text cleaning utilities used by both training and inference."""
 import re
 import string
 from typing import List
@@ -9,7 +8,6 @@ MULTI_SPACE_RE = re.compile(r"\s+")
 
 
 def clean_text(text: str) -> str:
-    """Lowercase, strip URLs/mentions, collapse whitespace. Keeps punctuation."""
     if not isinstance(text, str):
         return ""
     text = text.lower()

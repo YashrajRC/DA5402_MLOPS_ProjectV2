@@ -1,10 +1,3 @@
-"""
-After training all models, run this to promote the best one.
-Uses MLflow model aliases (replaces deprecated stage-based promotion).
-
-Usage: python scripts/promote_model.py
-The winning version gets the alias 'champion'; previous champion is archived to 'challenger'.
-"""
 import os
 from mlflow import MlflowClient
 
@@ -20,9 +13,6 @@ def main():
         print("No registered versions yet. Train first.")
         return
 
-    # Pick the version with the highest macro_f1 among versions that have
-    # val_macro_f1 logged (i.e. trained with the proper validation split).
-    # Older versions without val metrics are excluded from promotion.
     best = None
     for v in versions:
         run = client.get_run(v.run_id)
@@ -46,13 +36,11 @@ def main():
     model_type = run.data.params.get("model_type", "?")
     print(f"\nBest: v{winner.version} ({model_type}) macro_f1={best_f1:.4f}")
 
-    # Archive existing champion as challenger before promoting new one
     try:
         current_champion = client.get_model_version_by_alias(MODEL_NAME, CHAMPION_ALIAS)
         if current_champion.version == winner.version:
             print(f"v{winner.version} is already the champion. Nothing to do.")
             return
-        # Rename old champion → challenger
         client.set_registered_model_alias(MODEL_NAME, "challenger", current_champion.version)
         client.delete_registered_model_alias(MODEL_NAME, CHAMPION_ALIAS)
         print(f"  Archived old champion (v{current_champion.version}) → challenger")

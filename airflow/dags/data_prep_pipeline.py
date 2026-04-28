@@ -1,16 +1,3 @@
-"""
-Airflow DAG: data_prep_pipeline
-
-Behavior:
-- FileSensor watches /opt/airflow/data/incoming for new CSV files
-- If no file in 12h → "Dry Pipeline" notification
-- On new CSV:
-    1. Validate structure (handles Kaggle 'statement'/'status' columns too)
-    2. Clean text, compute batch statistics
-    3. Detect drift vs baseline (Jensen-Shannon on top-1000 word frequencies)
-    4. Archive the processed CSV
-    5. Send batch stats report (email if SMTP configured, logs to file otherwise)
-"""
 from __future__ import annotations
 
 import json
@@ -38,8 +25,6 @@ NOTIFY_LOG    = Path("/opt/airflow/logs") / "notifications.log"
 REQUIRED_COLS = {"text", "label"}
 COL_ALIASES   = {"statement": "text", "status": "label"}   # Kaggle dataset columns
 
-
-# ─────────────────────────── helpers ────────────────────────────────────────
 
 def _normalize_columns(df: pd.DataFrame) -> pd.DataFrame:
     """Lowercase column names and apply Kaggle→canonical renaming."""
@@ -75,8 +60,6 @@ def _notify(subject: str, html: str, **ctx):
     except Exception as e:
         print(f"[notify] Email failed ({e}) — already logged to file.")
 
-
-# ─────────────────────────── task callables ─────────────────────────────────
 
 def _find_latest_csv(**ctx):
     INCOMING_DIR.mkdir(parents=True, exist_ok=True)
@@ -247,8 +230,6 @@ def _send_dry_pipeline_notification(**ctx):
     )
 
 
-# ─────────────────────────── DAG definition ─────────────────────────────────
-
 default_args = {
     "owner":                    "mlops-student",
     "depends_on_past":          False,
@@ -329,7 +310,6 @@ with DAG(
         trigger_rule=TriggerRule.ALL_SKIPPED,   # fires when sensor soft-fails (→ skipped)
     )
 
-    # ── Success path ──────────────────────────────────────────────────────────
     (
         wait_for_csv
         >> find_latest_csv
@@ -340,6 +320,5 @@ with DAG(
         >> notify_stats
     )
 
-    # ── Failure / alert branches ──────────────────────────────────────────────
     validate_csv     >> notify_broken_csv    # fires if validate_csv fails
     wait_for_csv     >> notify_dry_pipeline  # fires when sensor is skipped (12 h timeout)

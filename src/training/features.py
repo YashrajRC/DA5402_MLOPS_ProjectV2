@@ -1,4 +1,3 @@
-"""Feature engineering: TF-IDF + hand-crafted numeric features."""
 import re
 import string
 
@@ -68,5 +67,4 @@ def build_tfidf(max_features: int, ngram_range):
 
 
 def combine_features(tfidf_matrix, handcrafted):
-    """hstack sparse TF-IDF with dense handcrafted features."""
     return hstack([tfidf_matrix, csr_matrix(handcrafted)])

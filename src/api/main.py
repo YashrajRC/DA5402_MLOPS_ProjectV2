@@ -1,14 +1,3 @@
-"""
-FastAPI backend.
-Endpoints:
-    POST /predict      - classify text
-    POST /feedback     - log feedback (used for retraining)
-    GET  /health       - liveness
-    GET  /ready        - readiness
-    GET  /metrics      - Prometheus
-    GET  /model_info   - model metadata for dashboard
-    GET  /live_stats   - aggregate live stats for dashboard
-"""
 import json
 import logging
 import os
@@ -142,7 +131,6 @@ def model_info():
     labels = bundle.get("labels", [])
     model_type = bundle.get("model_type", "unknown")
 
-    # Load metrics: local file first, MLflow run as fallback
     metrics_data = {}
     metrics_file = Path(f"/app/metrics/{model_type}_metrics.json")
     if metrics_file.exists():
@@ -171,7 +159,6 @@ def model_info():
         except Exception:
             pass
 
-    # Class distribution from baseline stats
     class_dist = {}
     baseline_file = Path(BASELINE)
     if baseline_file.exists():
